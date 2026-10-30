@@ -46,13 +46,13 @@
     for (const [k, v] of Object.entries(o)) r[camel(k)] = v === null && !['to_proyecto', 'from_levantamiento', 'edited_at', 'last_login', 'updated_at', 'updated_by'].includes(k) ? '' : v;
     return r;
   };
-  const RECORD_FIELDS = ['name', 'client', 'address', 'contact', 'contactPhone', 'responsible', 'startDate', 'endDate', 'description', 'network', 'priority'];
+  const RECORD_FIELDS = ['name', 'client', 'address', 'contact', 'contactPhone', 'responsible', 'startDate', 'endDate', 'description', 'network', 'priority', 'frequency', 'nextDate'];
   const EQUIP_FIELDS = ['type', 'brand', 'model', 'ip', 'port', 'mac', 'serial', 'location', 'username', 'password', 'notes'];
   const pick = (body, fields) => {
     const o = {};
     for (const f of fields) if (f in body) {
       let v = body[f] == null ? '' : String(body[f]).trim();
-      if ((f === 'startDate' || f === 'endDate') && !v) v = null;
+      if ((f === 'startDate' || f === 'endDate' || f === 'nextDate') && !v) v = null;
       o[snake(f)] = v;
     }
     return o;
@@ -168,7 +168,7 @@
       if (p === '/api/dashboard') {
         const start = new Date(); start.setHours(0, 0, 0, 0);
         const [recs, act, today, nPhotos, nEquip, nUsers] = await Promise.all([
-          sb.from('records').select('kind,status'),
+          sb.from('records').select('kind,status,next_date'),
           sb.from('activity').select('*, records(id,code,name,kind)').order('id', { ascending: false }).limit(40),
           sb.from('entries').select('id', { count: 'exact', head: true }).gte('at', start.toISOString()),
           sb.from('photos').select('id', { count: 'exact', head: true }),
@@ -178,14 +178,17 @@
         const STATUSES = {
           proyecto: ['nuevo', 'abastecimiento', 'proceso', 'facturacion', 'finalizado'],
           levantamiento: ['visita_pendiente', 'visita_realizada', 'aprobado', 'rechazado'],
+          mantencion: ['activa', 'pausada', 'finalizada'],
         };
         const byStatus = {};
         for (const k of Object.keys(STATUSES)) byStatus[k] = Object.fromEntries(STATUSES[k].map((s) => [s, 0]));
-        check(recs).forEach((r) => { byStatus[r.kind][r.status]++; });
+        const soon = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10);
+        let maintDue = 0;
+        check(recs).forEach((r) => { byStatus[r.kind][r.status]++; if (r.kind === 'mantencion' && r.status === 'activa' && r.next_date && r.next_date <= soon) maintDue++; });
         const recent = check(act).map((a) => ({ ...toCamel(a), record: a.records || null }));
         return {
           byStatus,
-          totals: { entriesToday: check(today) || 0, photos: check(nPhotos) || 0, equipment: check(nEquip) || 0, users: check(nUsers) || 0 },
+          totals: { maintDue, entriesToday: check(today) || 0, photos: check(nPhotos) || 0, equipment: check(nEquip) || 0, users: check(nUsers) || 0 },
           recent,
         };
       }
@@ -198,7 +201,7 @@
       if (p === '/api/records' && method === 'POST') {
         requireAdmin();
         if (!String(body.name || '').trim()) fail(400, 'El nombre es obligatorio');
-        const row = { kind: body.kind, status: body.kind === 'proyecto' ? 'nuevo' : 'visita_pendiente', ...pick(body, RECORD_FIELDS) };
+        const row = { kind: body.kind, status: ({ proyecto: 'nuevo', levantamiento: 'visita_pendiente', mantencion: 'activa' })[body.kind], ...pick(body, RECORD_FIELDS) };
         const r = check(await sb.from('records').insert(row).select().single());
         return { record: toCamel(r) };
       }
@@ -292,6 +295,16 @@
         check(await sb.from('photos').delete().eq('id', seg[2]));
         return { ok: true };
       }
+      // Notificaciones (registros de otros usuarios)
+      if (p === '/api/notifications' && method === 'GET') {
+        const prof = check(await sb.from('profiles').select('notif_seen_at').eq('id', me.id).maybeSingle());
+        const seen = prof ? prof.notif_seen_at : null;
+        const rows = check(await sb.from('entries').select('*, records(id,code,name,kind)').neq('user_id', me.id).order('at', { ascending: false }).limit(40));
+        const items = rows.map((e) => ({ ...toCamel(e), record: e.records || null, unread: !!(seen && e.at > seen) }));
+        return { items, unread: items.filter((x) => x.unread).length, seenAt: seen };
+      }
+      if (p === '/api/notifications/seen') { check(await sb.rpc('mark_notifications_seen')); return { ok: true }; }
+
       // Respaldo (descarga JSON con todos los datos, sin fotos)
       if (p === '/api/backup') {
         requireAdmin();
@@ -329,7 +342,19 @@
       .subscribe();
   }
 
+  // Tiempo real: cualquier registro nuevo en cualquier proyecto (para la campana de avisos)
+  let allChannel = null;
+  function watchAllEntries(onInsert) {
+    if (!sb) return;
+    if (allChannel) { sb.removeChannel(allChannel); allChannel = null; }
+    if (!onInsert) return;
+    allChannel = sb.channel('all-entries')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'entries' }, (payload) => onInsert(toCamel(payload.new)))
+      .subscribe();
+  }
+
   window.mtsApi = mtsApi;
+  window.mtsWatchAllEntries = watchAllEntries;
   window.mtsDownloadPhoto = downloadPhoto;
   window.mtsWatchRecord = watchRecord;
 })();

@@ -8,6 +8,9 @@ const STATUS_META = {
   proceso:          { label: 'En proceso',               c: 'var(--accent)' },
   facturacion:      { label: 'Pendiente de facturación', c: 'var(--violet)' },
   finalizado:       { label: 'Finalizado',               c: 'var(--green)' },
+  activa:           { label: 'Activa',                   c: 'var(--green)' },
+  pausada:          { label: 'Pausada',                  c: 'var(--amber)' },
+  finalizada:       { label: 'Finalizada',               c: 'var(--muted)' },
   visita_pendiente: { label: 'Visita pendiente',         c: 'var(--amber)' },
   visita_realizada: { label: 'Visita realizada',         c: 'var(--cyan)' },
   aprobado:         { label: 'Aprobado',                 c: 'var(--green)' },
@@ -16,17 +19,26 @@ const STATUS_META = {
 const STATUSES = {
   proyecto: ['nuevo', 'abastecimiento', 'proceso', 'facturacion', 'finalizado'],
   levantamiento: ['visita_pendiente', 'visita_realizada', 'aprobado', 'rechazado'],
+  mantencion: ['activa', 'pausada', 'finalizada'],
 };
 const KIND = {
-  proyecto: { one: 'Proyecto', many: 'Proyectos', route: 'proyectos' },
-  levantamiento: { one: 'Levantamiento', many: 'Levantamientos', route: 'levantamientos' },
+  proyecto: { one: 'Proyecto', many: 'Proyectos', route: 'proyectos', nuevo: 'Nuevo proyecto', del: 'del proyecto' },
+  levantamiento: { one: 'Levantamiento', many: 'Levantamientos', route: 'levantamientos', nuevo: 'Nuevo levantamiento', del: 'del levantamiento' },
+  mantencion: { one: 'Mantención', many: 'Mantenciones', route: 'mantenciones', nuevo: 'Nueva mantención', del: 'de la mantención' },
 };
 const ENTRY_META = {
   comentario: { label: 'Comentario', c: 'var(--muted)' },
   avance:     { label: 'Avance diario', c: 'var(--accent)' },
   incidencia: { label: 'Incidencia', c: 'var(--red)' },
   material:   { label: 'Material', c: 'var(--amber)' },
+  mantencion: { label: 'Mantención realizada', c: 'var(--green)' },
 };
+const ENTRY_TYPES_BY_KIND = {
+  proyecto: ['avance', 'comentario', 'incidencia', 'material'],
+  levantamiento: ['comentario', 'avance', 'incidencia', 'material'],
+  mantencion: ['mantencion', 'comentario', 'incidencia', 'material'],
+};
+const FREQ = { mensual: 'Mensual', bimestral: 'Bimestral', trimestral: 'Trimestral', semestral: 'Semestral', anual: 'Anual' };
 const EQUIP_TYPES = ['Cámara IP', 'Cámara análoga', 'PTZ', 'NVR', 'DVR', 'Switch', 'Switch PoE', 'Router', 'Antena / enlace', 'Access point', 'Central de alarma', 'Sensor', 'Control de acceso', 'Cerradura', 'Citófono', 'Monitor', 'UPS', 'Rack', 'Otro'];
 const AVATAR_COLORS = ['#EE6A2F', '#4FC3F7', '#A78BFA', '#34D399', '#F5B544', '#F472B6', '#60A5FA', '#2DD4BF'];
 
@@ -65,6 +77,9 @@ const ICON = {
   key: I('<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>'),
   down: I('<path d="M12 4v12M6 11l6 6 6-6M4 20h16"/>'),
   arrow: I('<path d="M5 12h14M13 6l6 6-6 6"/>'),
+  wrench: I('<path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 1.3-1.3a4 4 0 0 0-5-5L3 9l3-3 3 3 1.3-1.3a4 4 0 0 0 4.4-1.4z"/>'),
+  bell: I('<path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/>'),
+  xls: I('<rect x="4" y="3" width="16" height="18" rx="2"/><path d="m9 8 6 8M15 8l-6 8"/>'),
 };
 
 // ───────────────────────── Estado ─────────────────────────
@@ -77,6 +92,7 @@ const S = {
   search: '',
   tab: 'bitacora',
   composer: { type: 'comentario', photos: [] },
+  notif: { unread: 0, items: [] },
 };
 function localGet(k, d) { try { return localStorage.getItem(k) || d; } catch { return d; } }
 function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* sin almacenamiento */ } }
@@ -108,6 +124,15 @@ function avatarColor(id) { let h = 0; for (const ch of String(id)) h = (h * 31 +
 const avatar = (u, cls = '') => `<span class="avatar ${cls}" style="--c:${avatarColor(u.id)}">${esc(initials(u.name))}</span>`;
 const chip = (status) => { const m = STATUS_META[status] || { label: status, c: 'var(--muted)' }; return `<span class="chip" style="--c:${m.c}"><i></i>${esc(m.label)}</span>`; };
 const prettyDetail = (d) => String(d || '').replace(/\b[a-z_]+\b/g, (w) => (STATUS_META[w] ? STATUS_META[w].label : w));
+const todayYmd = () => dayKey(new Date().toISOString());
+function dueInfo(r) {
+  if (r.kind !== 'mantencion' || !r.nextDate || r.status !== 'activa') return null;
+  const days = Math.round((new Date(r.nextDate + 'T12:00:00Z') - new Date(todayYmd() + 'T12:00:00Z')) / 864e5);
+  if (days < 0) return { days, c: 'var(--red)', text: `Atrasada ${-days} día${days === -1 ? '' : 's'}` };
+  if (days === 0) return { days, c: 'var(--amber)', text: 'Toca hoy' };
+  if (days <= 7) return { days, c: 'var(--amber)', text: `En ${days} día${days === 1 ? '' : 's'}` };
+  return { days, c: 'var(--cyan)', text: `En ${days} días` };
+}
 const roleTag = (u) => (u.role === 'admin' ? '<span class="tag role" style="--c:var(--accent)">Admin</span>' : '<span class="tag role" style="--c:var(--cyan)">Técnico</span>');
 
 async function api(path, opts = {}) {
@@ -271,9 +296,10 @@ function navItems() {
     { r: 'panel', n: '01', label: 'Panel', icon: ICON.dash },
     { r: 'proyectos', n: '02', label: 'Proyectos', icon: ICON.proj, count: S.records.filter((x) => x.kind === 'proyecto' && x.status !== 'finalizado').length },
     { r: 'levantamientos', n: '03', label: 'Levantamientos', icon: ICON.lev, count: S.records.filter((x) => x.kind === 'levantamiento' && ['visita_pendiente', 'visita_realizada'].includes(x.status)).length },
+    { r: 'mantenciones', n: '04', label: 'Mantenciones', icon: ICON.wrench, count: S.records.filter((x) => { const d = dueInfo(x); return d && d.days <= 7; }).length },
   ];
-  if (isAdmin()) items.push({ r: 'usuarios', n: '04', label: 'Usuarios', icon: ICON.users });
-  items.push({ r: 'perfil', n: isAdmin() ? '05' : '04', label: 'Mi cuenta', icon: ICON.user });
+  if (isAdmin()) items.push({ r: 'usuarios', n: '05', label: 'Usuarios', icon: ICON.users });
+  items.push({ r: 'perfil', n: isAdmin() ? '06' : '05', label: 'Mi cuenta', icon: ICON.user });
   return items;
 }
 function shell(active, content) {
@@ -284,20 +310,22 @@ function shell(active, content) {
       <div class="brand"><img src="img/logo.png" alt=""><div><b>MTS SECURITY</b><small>OPERACIONES</small></div></div>
       <nav class="nav">${items.map((it) => `<a href="#/${it.r}" class="${active === it.r ? 'on' : ''}"><span class="n">${it.n}</span>${it.icon}${it.label}${it.count ? `<span class="count">${it.count}</span>` : ''}</a>`).join('')}</nav>
       <div class="side-foot">
+        ${isAdmin() ? `<button class="btn notif-btn" data-notif>${ICON.bell} Avisos <span class="nbadge ${S.notif.unread ? '' : 'hidden'}">${S.notif.unread}</span></button>` : ''}
         <div class="me">${avatar(S.me)}<div class="grow"><b>${esc(S.me.name)}</b><small>${esc(S.me.role === 'admin' ? 'Administrador' : 'Técnico')}</small></div>
           <button class="btn ghost icon" id="logout" title="Cerrar sesión" aria-label="Cerrar sesión">${ICON.out}</button></div>
         <div class="sys"><i></i>SISTEMA EN LÍNEA</div>
       </div>
     </aside>
     <div>
-      <header class="topbar"><img src="img/logo.png" alt=""><b class="grow">MTS OPS</b>${avatar(S.me)}<button class="btn ghost icon" id="logout2" aria-label="Cerrar sesión">${ICON.out}</button></header>
+      <header class="topbar"><img src="img/logo.png" alt=""><b class="grow">MTS OPS</b>${isAdmin() ? `<button class="btn ghost icon notif-ico" data-notif aria-label="Avisos">${ICON.bell}<span class="nbadge ${S.notif.unread ? '' : 'hidden'}">${S.notif.unread}</span></button>` : ''}<a href="#/perfil" aria-label="Mi cuenta">${avatar(S.me)}</a><button class="btn ghost icon" id="logout2" aria-label="Cerrar sesión">${ICON.out}</button></header>
       <main class="main" id="main">${content}</main>
     </div>
-    <nav class="bottomnav" style="--cols:${items.length}">${items.map((it) => `<a href="#/${it.r}" class="${active === it.r ? 'on' : ''}">${it.icon}${it.label === 'Levantamientos' ? 'Levant.' : it.label}</a>`).join('')}</nav>
+    <nav class="bottomnav" style="--cols:${items.length - 1}">${items.filter((it) => it.r !== 'perfil').map((it) => `<a href="#/${it.r}" class="${active === it.r ? 'on' : ''}">${it.icon}${({ Levantamientos: 'Levant.', Mantenciones: 'Mantenc.' })[it.label] || it.label}</a>`).join('')}</nav>
   </div>`;
-  const lo = async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); S.me = null; location.hash = ''; renderLogin(); };
+  const lo = async () => { window.mtsWatchAllEntries(null); await api('/api/logout', { method: 'POST' }).catch(() => {}); S.me = null; S.notif = { unread: 0, items: [] }; location.hash = ''; renderLogin(); };
   document.getElementById('logout').onclick = lo;
   document.getElementById('logout2').onclick = lo;
+  app.querySelectorAll('[data-notif]').forEach((b) => (b.onclick = openNotifications));
   window.scrollTo(0, 0);
 }
 
@@ -309,6 +337,7 @@ async function route() {
   try {
     if (a === 'proyectos') return await viewList('proyecto');
     if (a === 'levantamientos') return await viewList('levantamiento');
+    if (a === 'mantenciones') return await viewList('mantencion');
     if (a === 'r' && b) return await viewRecord(b);
     if (a === 'usuarios' && isAdmin()) return await viewUsers();
     if (a === 'perfil') return viewProfile();
@@ -336,10 +365,11 @@ async function viewDashboard() {
   };
   shell('panel', `
     <div class="page-h"><div class="grow"><span class="label">${esc(fDayLong(new Date().toISOString()))}</span><h1>${greet}, ${esc(S.me.name.split(' ')[0])}</h1></div>
-      ${isAdmin() ? `<button class="btn" data-new="levantamiento">${ICON.plus} Levantamiento</button><button class="btn primary" data-new="proyecto">${ICON.plus} Proyecto</button>` : ''}</div>
+      ${isAdmin() ? `<button class="btn" data-new="mantencion">${ICON.plus} Mantención</button><button class="btn" data-new="levantamiento">${ICON.plus} Levantamiento</button><button class="btn primary" data-new="proyecto">${ICON.plus} Proyecto</button>` : ''}</div>
     <div class="kpis">
       <div class="kpi panel" style="--c:var(--accent)"><span class="label">Proyectos activos</span><div class="v">${activos}<small>/ ${Object.values(p).reduce((a, b) => a + b, 0)}</small></div><span class="bar"></span></div>
       <div class="kpi panel" style="--c:var(--amber)"><span class="label">Visitas pendientes</span><div class="v">${l.visita_pendiente}</div><span class="bar"></span></div>
+      <div class="kpi panel" style="--c:var(--green)"><span class="label">Mantenciones próximas</span><div class="v">${d.totals.maintDue || 0}<small>7 días</small></div><span class="bar"></span></div>
       <div class="kpi panel" style="--c:var(--violet)"><span class="label">Por facturar</span><div class="v">${p.facturacion}</div><span class="bar"></span></div>
       <div class="kpi panel" style="--c:var(--cyan)"><span class="label">Registros hoy</span><div class="v">${d.totals.entriesToday}</div><span class="bar"></span></div>
     </div>
@@ -358,6 +388,7 @@ async function viewDashboard() {
       </section>
       <div class="stack">
         <section class="panel"><div class="panel-h"><h2 class="grow">Proyectos por estado</h2><a class="label" href="#/proyectos">Ver todos →</a></div><div class="panel-b sbars">${bars('proyecto')}</div></section>
+        <section class="panel"><div class="panel-h"><h2 class="grow">Próximas mantenciones</h2><a class="label" href="#/mantenciones">Ver todas →</a></div><div class="panel-b" style="padding-top:6px;padding-bottom:6px">${upcomingMaint()}</div></section>
         <section class="panel"><div class="panel-h"><h2 class="grow">Levantamientos</h2><a class="label" href="#/levantamientos">Ver todos →</a></div><div class="panel-b sbars">${bars('levantamiento')}</div></section>
         <section class="panel"><div class="panel-b row wrap" style="gap:24px">
           <div><span class="label">Equipos registrados</span><div class="mono" style="font-size:22px;margin-top:4px">${d.totals.equipment}</div></div>
@@ -367,7 +398,13 @@ async function viewDashboard() {
       </div>
     </div>`);
   app.querySelectorAll('[data-new]').forEach((b) => (b.onclick = () => recordForm(b.dataset.new)));
-  app.querySelectorAll('.sbar[data-f]').forEach((a) => a.addEventListener('click', () => { const k = a.getAttribute('href').includes('proyectos') ? 'proyecto' : 'levantamiento'; S.filter[k] = a.dataset.f; }));
+  app.querySelectorAll('.sbar[data-f]').forEach((a) => a.addEventListener('click', () => { const k = a.getAttribute('href').includes('proyectos') ? 'proyecto' : a.getAttribute('href').includes('mantenciones') ? 'mantencion' : 'levantamiento'; S.filter[k] = a.dataset.f; }));
+}
+
+function upcomingMaint() {
+  const list = S.records.filter((r) => r.kind === 'mantencion' && r.status === 'activa' && r.nextDate).sort((a, b) => a.nextDate.localeCompare(b.nextDate)).slice(0, 5);
+  if (!list.length) return `<p class="dim" style="font-size:13.5px;margin:10px 0">No hay mantenciones activas.${isAdmin() ? ' Crea una con el botón "Mantención".' : ''}</p>`;
+  return `<div class="mlist">${list.map((r) => { const d = dueInfo(r); return `<a class="mrow" href="#/r/${r.id}" style="--c:${d.c}"><span class="mdot"></span><span class="grow" style="min-width:0"><b>${esc(r.name)}</b><small>${esc(r.client || '')}${r.frequency ? ' · ' + esc(FREQ[r.frequency] || r.frequency) : ''}</small></span><span class="mdate"><b>${esc(fYmd(r.nextDate))}</b><small>${esc(d.text)}</small></span></a>`; }).join('')}</div>`;
 }
 
 // ───────────────────────── Listado ─────────────────────────
@@ -377,17 +414,22 @@ function recordCard(r) {
     <div class="row"><span class="code grow">${esc(r.code)}${r.priority === 'alta' ? ' · <span class="prio-alta">PRIORIDAD ALTA</span>' : ''}</span>${chip(r.status)}</div>
     <h3>${esc(r.name)}</h3>
     <div class="cl">${esc(r.client || 'Sin cliente asignado')}${r.address ? ' · ' + esc(r.address) : ''}</div>
+    ${r.kind === 'mantencion' ? maintLine(r) : ''}
     <div class="meta"><span title="Registros">${ICON.msg}${r.counts.entries}</span><span title="Fotos">${ICON.img}${r.counts.photos}</span><span title="Equipos">${ICON.chip}${r.counts.equipment}</span><span class="when">${esc(ago(r.lastActivity))}</span></div>
   </a>`;
+}
+function maintLine(r) {
+  const d = dueInfo(r);
+  return `<div class="mline">${ICON.cal}<span>${r.frequency ? esc(FREQ[r.frequency] || r.frequency) + ' · ' : ''}Próxima: <b>${r.nextDate ? esc(fYmd(r.nextDate)) : '—'}</b></span>${d ? `<span class="tag" style="--c:${d.c}">${esc(d.text)}</span>` : ''}</div>`;
 }
 async function viewList(kind) {
   await Promise.all([refreshRecords(), S.users.length ? null : refreshUsers()]);
   const K = KIND[kind];
   const all = S.records.filter((r) => r.kind === kind);
-  const f = S.filter[kind] || 'todos';
+  if (kind === 'mantencion') all.sort((a, b) => (a.status === 'activa' ? 0 : 1) - (b.status === 'activa' ? 0 : 1) || String(a.nextDate || '9').localeCompare(String(b.nextDate || '9')));
   shell(K.route, `
     <div class="page-h"><div class="grow"><span class="label">${all.length} registro(s)</span><h1>${K.many}</h1></div>
-      ${isAdmin() ? `<button class="btn primary" id="new">${ICON.plus} Nuevo ${K.one.toLowerCase()}</button>` : ''}</div>
+      ${isAdmin() ? `<button class="btn primary" id="new">${ICON.plus} ${K.nuevo}</button>` : ''}</div>
     <div class="toolbar">
       <label class="search"><span class="sr">Buscar</span>${ICON.search}<input class="input" id="q" placeholder="Buscar por nombre, cliente, código…" value="${esc(S.search)}"></label>
       <span class="grow"></span>
@@ -431,23 +473,28 @@ function recordForm(kind, r = null) {
   const K = KIND[kind];
   const v = (k) => esc(r ? r[k] || '' : '');
   openModal({
-    title: r ? `Editar ${K.one.toLowerCase()}` : `Nuevo ${K.one.toLowerCase()}`,
+    title: r ? `Editar ${K.one.toLowerCase()}` : K.nuevo,
     wide: true,
     body: `<form id="rf" class="grid2">
-      <label class="field span2"><span>Nombre del ${K.one.toLowerCase()} *</span><input class="input" name="name" required maxlength="120" placeholder="Ej: CCTV CATÓLICA" value="${v('name')}"></label>
+      <label class="field span2"><span>Nombre ${K.del} *</span><input class="input" name="name" required maxlength="120" placeholder="${kind === 'mantencion' ? 'Ej: Mantención CCTV Estadio UC' : 'Ej: CCTV CATÓLICA'}" value="${v('name')}"></label>
       <label class="field"><span>Cliente</span><input class="input" name="client" maxlength="120" placeholder="Ej: Club Deportivo Universidad Católica" value="${v('client')}"></label>
       <label class="field"><span>Dirección</span><input class="input" name="address" maxlength="200" value="${v('address')}"></label>
       <label class="field"><span>Contacto en sitio</span><input class="input" name="contact" maxlength="120" value="${v('contact')}"></label>
       <label class="field"><span>Teléfono contacto</span><input class="input mono" name="contactPhone" maxlength="40" placeholder="+56 9 …" value="${v('contactPhone')}"></label>
       <label class="field"><span>Encargado MTS</span><input class="input" name="responsible" maxlength="120" list="ulist" value="${v('responsible')}"><datalist id="ulist">${S.users.filter((u) => u.active).map((u) => `<option value="${esc(u.name)}">`).join('')}</datalist></label>
       <label class="field"><span>Prioridad</span><select class="input" name="priority">${['baja', 'media', 'alta'].map((p) => `<option value="${p}" ${(r ? r.priority : 'media') === p ? 'selected' : ''}>${p[0].toUpperCase() + p.slice(1)}</option>`).join('')}</select></label>
+      ${kind === 'mantencion' ? `
+      <label class="field"><span>Frecuencia</span><select class="input" name="frequency">${Object.entries(FREQ).map(([k, l]) => `<option value="${k}" ${(r ? r.frequency || 'mensual' : 'mensual') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="field"><span>Próxima mantención</span><input class="input mono" type="date" name="nextDate" value="${v('nextDate') || (r ? '' : todayYmd())}"></label>
+      <label class="field"><span>Inicio del contrato</span><input class="input mono" type="date" name="startDate" value="${v('startDate')}"></label>
+      <label class="field"><span>Término del contrato (opcional)</span><input class="input mono" type="date" name="endDate" value="${v('endDate')}"></label>` : `
       <label class="field"><span>${kind === 'proyecto' ? 'Fecha de inicio' : 'Fecha de visita'}</span><input class="input mono" type="date" name="startDate" value="${v('startDate')}"></label>
-      <label class="field"><span>${kind === 'proyecto' ? 'Entrega estimada' : 'Fecha de respuesta'}</span><input class="input mono" type="date" name="endDate" value="${v('endDate')}"></label>
-      <label class="field span2"><span>Descripción / alcance</span><textarea class="input" name="description" maxlength="4000" placeholder="${kind === 'proyecto' ? 'Qué se instalará, cantidades, consideraciones…' : 'Qué solicita el cliente, qué hay que revisar en la visita…'}">${v('description')}</textarea></label>
+      <label class="field"><span>${kind === 'proyecto' ? 'Entrega estimada' : 'Fecha de respuesta'}</span><input class="input mono" type="date" name="endDate" value="${v('endDate')}"></label>`}
+      <label class="field span2"><span>Descripción / alcance</span><textarea class="input" name="description" maxlength="4000" placeholder="${kind === 'proyecto' ? 'Qué se instalará, cantidades, consideraciones…' : kind === 'mantencion' ? 'Qué incluye cada mantención: revisión de cámaras, limpieza, grabación, respaldo, informe…' : 'Qué solicita el cliente, qué hay que revisar en la visita…'}">${v('description')}</textarea></label>
       <label class="field span2"><span>Datos de red (gateway, rango IP, VLAN, DDNS, acceso remoto…)</span><textarea class="input mono" name="network" maxlength="2000" style="min-height:80px;font-size:13px" placeholder="Gateway 192.168.1.1 · Rango 192.168.1.100-150 · VLAN 20">${v('network')}</textarea></label>
       <p class="err span2" id="rf-err"></p>
     </form>`,
-    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="rf">${r ? 'Guardar cambios' : `Crear ${K.one.toLowerCase()}`}</button>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="rf">${r ? 'Guardar cambios' : 'Crear'}</button>`,
     onMount: (el, close) => {
       el.querySelector('#rf').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -469,7 +516,7 @@ let REC = null; // datos del registro abierto
 async function viewRecord(id, keepScroll = false) {
   const y = window.scrollY;
   const [d] = await Promise.all([api(`/api/records/${id}`), refreshUsers(), S.records.length ? null : refreshRecords()]);
-  if (!REC || REC.record.id !== id) { S.tab = 'bitacora'; S.composer = { type: d.record.kind === 'proyecto' ? 'avance' : 'comentario', photos: [] }; }
+  if (!REC || REC.record.id !== id) { S.tab = 'bitacora'; S.composer = { type: ENTRY_TYPES_BY_KIND[d.record.kind][0], photos: [] }; }
   if (!REC || REC.record.id !== id) window.mtsWatchRecord(id, () => { if (REC && REC.record.id === id && !document.querySelector('.overlay, .lightbox')) reloadRecord(); });
   REC = d;
   const r = d.record; const K = KIND[r.kind];
@@ -481,14 +528,16 @@ async function viewRecord(id, keepScroll = false) {
   // Línea de estados
   const pipe = statuses.map((s, i) => {
     let cls = '';
-    if (r.kind === 'levantamiento' && (s === 'aprobado' || s === 'rechazado')) {
+    if (r.kind === 'mantencion') {
+      cls = r.status === s ? 'cur' : '';
+    } else if (r.kind === 'levantamiento' && (s === 'aprobado' || s === 'rechazado')) {
       if (r.status === s) cls = 'cur';
       else if ((r.status === 'aprobado' || r.status === 'rechazado')) cls = 'off';
     } else if (i < curIdx || (r.kind === 'levantamiento' && curIdx >= 2 && i < 2)) cls = 'done';
     else if (i === curIdx) cls = 'cur';
     if (r.kind === 'proyecto' && s === 'finalizado' && r.status === 'finalizado') cls = 'done cur';
     const m = STATUS_META[s];
-    const sym = cls.includes('done') ? ICON.check : s === 'rechazado' && cls.includes('cur') ? ICON.x : s === 'aprobado' && cls.includes('cur') ? ICON.check : String(i + 1).padStart(2, '0');
+    const sym = r.kind === 'mantencion' ? (r.status === s ? ICON.check : String(i + 1).padStart(2, '0')) : cls.includes('done') ? ICON.check : s === 'rechazado' && cls.includes('cur') ? ICON.x : s === 'aprobado' && cls.includes('cur') ? ICON.check : String(i + 1).padStart(2, '0');
     return `<button class="step ${cls} ${isAdmin() && r.status !== s ? 'can' : ''}" style="--c:${m.c}" data-s="${s}" ${isAdmin() ? '' : 'tabindex="-1"'} title="${isAdmin() && r.status !== s ? 'Cambiar a: ' + esc(m.label) : esc(m.label)}">
       <span class="dot">${sym}</span><span class="nm">${esc(m.label)}</span></button>`;
   }).join('');
@@ -513,7 +562,7 @@ async function viewRecord(id, keepScroll = false) {
         ${r.client ? `<span>${ICON.build}${esc(r.client)}</span>` : ''}
         ${r.address ? `<span>${ICON.pin}<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.address)}" target="_blank" rel="noopener">${esc(r.address)}</a></span>` : ''}
         ${r.responsible ? `<span>${ICON.user}${esc(r.responsible)}</span>` : ''}
-        ${r.startDate ? `<span>${ICON.cal}${esc(fYmd(r.startDate))}${r.endDate ? ' → ' + esc(fYmd(r.endDate)) : ''}</span>` : ''}
+        ${r.kind === 'mantencion' ? `<span>${ICON.wrench}${esc(FREQ[r.frequency] || 'Sin frecuencia')}</span><span>${ICON.cal}Próxima: <b style="color:var(--ink);margin-left:4px">${r.nextDate ? esc(fYmd(r.nextDate)) : '—'}</b>${dueInfo(r) ? `<span class="tag" style="--c:${dueInfo(r).c};margin-left:8px">${esc(dueInfo(r).text)}</span>` : ''}</span><span>${ICON.check}Última: ${r.lastDate ? esc(fYmd(r.lastDate)) : 'sin registro'}</span>` : r.startDate ? `<span>${ICON.cal}${esc(fYmd(r.startDate))}${r.endDate ? ' → ' + esc(fYmd(r.endDate)) : ''}</span>` : ''}
         ${linked ? `<span>${ICON.proj}Proyecto generado: <a href="#/r/${linked.id}">${esc(linked.code)}</a></span>` : ''}
         ${origin ? `<span>${ICON.lev}Viene del levantamiento <a href="#/r/${origin.id}">${esc(origin.code)}</a></span>` : ''}
       </div>
@@ -604,9 +653,9 @@ function tabLog(box) {
 
   box.innerHTML = `
     <section class="composer panel hud">
-      <div class="types">${Object.entries(ENTRY_META).map(([k, m]) => `<button data-type="${k}" style="--c:${m.c}" class="${C.type === k ? 'on' : ''}">${esc(m.label)}</button>`).join('')}</div>
+      <div class="types">${ENTRY_TYPES_BY_KIND[REC.record.kind].map((k) => [k, ENTRY_META[k]]).map(([k, m]) => `<button data-type="${k}" style="--c:${m.c}" class="${C.type === k ? 'on' : ''}">${esc(m.label)}</button>`).join('')}</div>
       <label class="sr" for="ct">Escribe un registro</label>
-      <textarea class="input" id="ct" maxlength="5000" placeholder="${C.type === 'avance' ? 'Qué se avanzó hoy: puntos instalados, cableado, configuración…' : C.type === 'incidencia' ? 'Describe el problema encontrado…' : C.type === 'material' ? 'Material usado o faltante: cantidades, modelos…' : 'Escribe un comentario para el equipo…'}">${esc(C.draft || '')}</textarea>
+      <textarea class="input" id="ct" maxlength="5000" placeholder="${C.type === 'mantencion' ? 'Qué se revisó: cámaras operativas, grabación, limpieza, ajustes realizados… (al publicar se calcula la próxima fecha)' : C.type === 'avance' ? 'Qué se avanzó hoy: puntos instalados, cableado, configuración…' : C.type === 'incidencia' ? 'Describe el problema encontrado…' : C.type === 'material' ? 'Material usado o faltante: cantidades, modelos…' : 'Escribe un comentario para el equipo…'}">${esc(C.draft || '')}</textarea>
       <div class="thumbs" id="thumbs"></div>
       <div class="actions">
         <label class="btn" style="cursor:pointer">${ICON.cam} Agregar fotos<input type="file" id="cf" accept="image/*" multiple hidden></label>
@@ -673,6 +722,7 @@ function tabEquip(box) {
     <div class="toolbar">
       <label class="search"><span class="sr">Buscar equipo</span>${ICON.search}<input class="input" id="eq" placeholder="Buscar IP, modelo, ubicación…"></label>
       <span class="grow"></span>
+      <button class="btn" id="eqxls" ${eqs.length ? '' : 'disabled'}>${ICON.xls} Exportar Excel</button>
       <button class="btn primary" id="eqadd">${ICON.plus} Agregar equipo</button>
     </div>
     <div id="eqlist"></div>`;
@@ -703,6 +753,7 @@ function tabEquip(box) {
   draw();
   box.querySelector('#eq').addEventListener('input', (e) => { q = e.target.value; draw(); });
   box.querySelector('#eqadd').onclick = () => equipForm(null);
+  box.querySelector('#eqxls').onclick = () => exportEquipment();
 }
 function equipForm(eq) {
   const v = (k) => esc(eq ? eq[k] || '' : '');
@@ -756,7 +807,7 @@ function tabPhotos(box) {
 function tabInfo(box) {
   const r = REC.record;
   const row = (k, v, raw = false) => `<div><dt>${k}</dt><dd>${v ? (raw ? v : esc(v)) : '<span class="dim">—</span>'}</dd></div>`;
-  box.innerHTML = `<section class="panel"><div class="panel-h"><h2 class="grow">Ficha del ${KIND[r.kind].one.toLowerCase()}</h2>${isAdmin() ? `<button class="btn sm" id="ed2">${ICON.edit} Editar</button>` : '<span class="label">Solo lectura</span>'}</div>
+  box.innerHTML = `<section class="panel"><div class="panel-h"><h2 class="grow">Ficha ${KIND[r.kind].del}</h2>${isAdmin() ? `<button class="btn sm" id="ed2">${ICON.edit} Editar</button>` : '<span class="label">Solo lectura</span>'}</div>
     <div class="panel-b"><dl class="dl">
       ${row('Código', `<span class="mono">${esc(r.code)}</span>`, true)}
       ${row('Nombre', r.name)}
@@ -766,8 +817,7 @@ function tabInfo(box) {
       ${row('Teléfono', r.contactPhone ? `<a class="mono" href="tel:${esc(r.contactPhone.replace(/\s/g, ''))}">${esc(r.contactPhone)}</a>` : '', true)}
       ${row('Encargado MTS', r.responsible)}
       ${row('Prioridad', r.priority ? r.priority[0].toUpperCase() + r.priority.slice(1) : '')}
-      ${row(r.kind === 'proyecto' ? 'Inicio' : 'Fecha visita', fYmd(r.startDate))}
-      ${row(r.kind === 'proyecto' ? 'Entrega estimada' : 'Fecha respuesta', fYmd(r.endDate))}
+      ${r.kind === 'mantencion' ? `${row('Frecuencia', FREQ[r.frequency] || '')}${row('Próxima mantención', fYmd(r.nextDate))}${row('Última realizada', fYmd(r.lastDate))}${row('Inicio contrato', fYmd(r.startDate))}${row('Término contrato', fYmd(r.endDate))}` : `${row(r.kind === 'proyecto' ? 'Inicio' : 'Fecha visita', fYmd(r.startDate))}${row(r.kind === 'proyecto' ? 'Entrega estimada' : 'Fecha respuesta', fYmd(r.endDate))}`}
       ${row('Descripción', r.description)}
       ${row('Datos de red', r.network ? `<span class="mono" style="font-size:13px">${esc(r.network)}</span>` : '', true)}
       ${row('Creado', `${esc(userById(r.createdBy).name)} · ${esc(fDateTime(r.createdAt))}`, true)}
@@ -925,6 +975,126 @@ function viewProfile() {
   });
 }
 
+// ───────────────────────── Exportar equipos a Excel ─────────────────────────
+let xlsxLoading = null;
+function loadXlsx() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (!xlsxLoading) xlsxLoading = new Promise((resolve, reject) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    sc.onload = () => resolve(window.XLSX);
+    sc.onerror = () => { xlsxLoading = null; reject(new Error('No se pudo cargar el generador de Excel. Revisa tu conexión.')); };
+    document.head.appendChild(sc);
+  });
+  return xlsxLoading;
+}
+function exportEquipment() {
+  const r = REC.record;
+  openModal({
+    title: 'Exportar equipos a Excel',
+    body: `<p class="muted" style="margin:0">Se descargará un archivo Excel con los <b style="color:var(--ink)">${REC.equipment.length} equipo(s)</b> de ${esc(r.code)} · ${esc(r.name)}.</p>
+      <div class="perm">
+        <label><input type="radio" name="xmode" value="cliente" checked><div><b>Para el cliente</b><small>Sin usuarios ni claves de los equipos.</small></div></label>
+        <label><input type="radio" name="xmode" value="interno"><div><b>Uso interno</b><small>Incluye usuario y clave de cada equipo. No lo compartas fuera de MTS.</small></div></label>
+      </div><p class="err" id="xe"></p>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="xok">${ICON.down} Descargar Excel</button>`,
+    onMount: (el, close) => {
+      el.querySelector('#xok').onclick = async (ev) => {
+        ev.target.disabled = true;
+        try {
+          const XLSX = await loadXlsx();
+          const withCreds = el.querySelector('input[name=xmode]:checked').value === 'interno';
+          const head = ['N°', 'Equipo', 'Marca', 'Modelo', 'IP', 'Puerto', 'Ubicación', 'MAC', 'N° de serie'].concat(withCreds ? ['Usuario', 'Clave'] : []).concat(['Notas']);
+          const rows = REC.equipment.map((e, i) => [i + 1, e.type, e.brand, e.model, e.ip, e.port, e.location, e.mac, e.serial].concat(withCreds ? [e.username, e.password] : []).concat([e.notes]));
+          const aoa = [
+            ['MTS SECURITY SPA · Listado de equipos'],
+            [`${r.code} · ${r.name}`],
+            [`Cliente: ${r.client || '—'}${r.address ? '   ·   Dirección: ' + r.address : ''}`],
+            [`Generado: ${fDateTime(new Date().toISOString())} por ${S.me.name}`],
+            [],
+            head,
+            ...rows,
+          ];
+          const ws = XLSX.utils.aoa_to_sheet(aoa);
+          ws['!cols'] = head.map((h) => ({ wch: ({ 'N°': 5, Equipo: 18, IP: 16, Puerto: 8, Ubicación: 24, Notas: 30, 'N° de serie': 20, MAC: 18 })[h] || 14 }));
+          ws['!merges'] = [0, 1, 2, 3].map((rr) => ({ s: { r: rr, c: 0 }, e: { r: rr, c: head.length - 1 } }));
+          ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 5, c: 0 }, e: { r: 5 + rows.length, c: head.length - 1 } }) };
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, 'Equipos');
+          const safe = `${r.code} ${r.name}`.replace(/[\\/:*?"<>|]+/g, '').slice(0, 80);
+          XLSX.writeFile(wb, `Equipos ${safe}${withCreds ? ' (interno)' : ''}.xlsx`);
+          close(); toast('Excel descargado');
+        } catch (e) { el.querySelector('#xe').textContent = e.message; ev.target.disabled = false; }
+      };
+    },
+  });
+}
+
+// ───────────────────────── Avisos (notificaciones) ─────────────────────────
+function updateBadges() {
+  document.querySelectorAll('.nbadge').forEach((b) => { b.textContent = S.notif.unread > 99 ? '99+' : S.notif.unread; b.classList.toggle('hidden', !S.notif.unread); });
+  document.title = (S.notif.unread ? `(${S.notif.unread}) ` : '') + 'MTS Operaciones';
+}
+async function refreshNotifications() {
+  try { const d = await api('/api/notifications'); S.notif.items = d.items; S.notif.unread = d.unread; updateBadges(); } catch { /* sin avisos */ }
+}
+const notifSupported = () => 'Notification' in window;
+function browserNotify(title, body, recordId, tag) {
+  if (!notifSupported() || Notification.permission !== 'granted') return;
+  try {
+    const n = new Notification(title, { body, icon: 'img/logo.png', tag });
+    n.onclick = () => { window.focus(); if (recordId) location.hash = `#/r/${recordId}`; n.close(); };
+  } catch { /* algunos celulares no permiten avisos fuera de la app */ }
+}
+function onNewEntry(e) {
+  if (!isAdmin() || e.userId === S.me.id) return;
+  S.notif.unread++; updateBadges();
+  const u = userById(e.userId);
+  const rec = S.records.find((x) => x.id === e.recordId);
+  const tm = ENTRY_META[e.type] || ENTRY_META.comentario;
+  const where = rec ? `${rec.code} · ${rec.name}` : 'un proyecto';
+  const isInc = e.type === 'incidencia';
+  toast(`${isInc ? '⚠ ' : ''}${u.name}: ${tm.label.toLowerCase()} en ${where}`, isInc ? 'var(--red)' : 'var(--cyan)');
+  if (document.hidden || isInc) browserNotify(`${isInc ? '⚠ Incidencia' : tm.label} · ${rec ? rec.name : 'MTS'}`, `${u.name}: ${e.text || 'subió fotos'}`.slice(0, 180), e.recordId, e.id);
+  refreshNotifications();
+}
+function startNotifications() {
+  if (!isAdmin()) { window.mtsWatchAllEntries(null); return; }
+  refreshNotifications();
+  window.mtsWatchAllEntries(onNewEntry);
+}
+async function openNotifications() {
+  await refreshNotifications();
+  const items = S.notif.items;
+  const perm = notifSupported() ? Notification.permission : 'unsupported';
+  const permBox = perm === 'granted' ? `<div class="note">${ICON.check.replace('<svg', '<svg style="width:15px;height:15px;vertical-align:-2px;margin-right:6px"')}<b>Avisos del navegador activados.</b> Te llegará un aviso aunque tengas la plataforma minimizada o en otra pestaña.</div>`
+    : perm === 'denied' ? `<div class="note">Los avisos del navegador están bloqueados. Para activarlos, toca el candado junto a la dirección de la página y permite <b>Notificaciones</b>.</div>`
+    : perm === 'unsupported' ? `<div class="note">Este navegador no permite avisos. Los verás aquí y en la campana mientras la plataforma esté abierta.</div>`
+    : `<div class="note row wrap" style="gap:10px"><span class="grow">Activa los avisos del navegador para enterarte aunque la plataforma esté minimizada.</span><button class="btn sm primary" id="nperm">${ICON.bell} Activar avisos</button></div>`;
+  const list = items.length ? items.map((e) => {
+    const u = userById(e.userId); const tm = ENTRY_META[e.type] || ENTRY_META.comentario;
+    return `<a class="nitem ${e.unread ? 'unread' : ''}" href="#/r/${e.recordId}" data-close-nav>${avatar(u)}<div style="min-width:0;flex:1">
+      <div class="t"><b>${esc(u.name)}</b> <span class="tag" style="--c:${tm.c}">${esc(tm.label)}</span></div>
+      <div class="x">${e.record ? `${esc(e.record.code)} · ${esc(e.record.name)}` : ''}</div>
+      ${e.text ? `<div class="nt">${esc(e.text.slice(0, 160))}${e.text.length > 160 ? '…' : ''}</div>` : ''}
+      <div class="d">${esc(fDateTime(e.at))}</div></div></a>`;
+  }).join('') : `<div class="empty" style="padding:30px 10px">${ICON.bell}<p>Sin avisos todavía.<br><span class="dim">Aquí aparecerá todo lo que registre tu equipo en los proyectos.</span></p></div>`;
+  openModal({
+    title: `Avisos${S.notif.unread ? ` · ${S.notif.unread} nuevo${S.notif.unread === 1 ? '' : 's'}` : ''}`,
+    body: `${permBox}<div class="nlist">${list}</div>`,
+    onMount: (el, close) => {
+      const pb = el.querySelector('#nperm');
+      if (pb) pb.onclick = async () => {
+        const res = await Notification.requestPermission();
+        if (res === 'granted') { toast('Avisos activados'); browserNotify('MTS Operaciones', 'Así se verán los avisos de tu equipo.', null, 'test'); }
+        close(); openNotifications();
+      };
+      el.querySelectorAll('[data-close-nav]').forEach((a) => a.addEventListener('click', () => close()));
+    },
+  });
+  if (S.notif.unread) { api('/api/notifications/seen', { method: 'POST' }).then(() => { S.notif.unread = 0; updateBadges(); }).catch(() => {}); }
+}
+
 // ───────────────────────── Inicio ─────────────────────────
 async function boot() {
   if (!window.mtsConfigured) {
@@ -936,7 +1106,8 @@ async function boot() {
     const d = await api('/api/me');
     S.me = d.user;
   } catch { return renderLogin(); }
-  await refreshUsers();
+  await Promise.all([refreshUsers(), refreshRecords().catch(() => {})]);
+  startNotifications();
   if (!location.hash || location.hash === '#/') location.hash = '#/panel';
   else route();
 }
