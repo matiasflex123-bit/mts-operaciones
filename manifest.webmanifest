@@ -1,0 +1,9 @@
+{
+  "name": "MTS Security · Operaciones",
+  "short_name": "MTS Ops",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0E1626",
+  "theme_color": "#0E1626",
+  "icons": [{ "src": "img/logo.png", "sizes": "360x317", "type": "image/png" }]
+}
