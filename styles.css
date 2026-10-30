@@ -500,3 +500,14 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   .page-h > .grow { flex: 1 1 100%; }
   .page-h > .btn { flex: 1 1 auto; }
 }
+
+/* Paso de decisión del levantamiento (Aprobado | Rechazado) */
+.step.branch { cursor: default; }
+.step.branch .opts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.opt { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--dim); font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
+.opt svg { width: 12px; height: 12px; }
+.opt.can { cursor: pointer; }
+.opt.can:hover { color: var(--c); border-color: var(--c); }
+.opt.on { color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); box-shadow: 0 0 12px color-mix(in srgb, var(--c) 35%, transparent); }
+.opt:disabled { opacity: 1; }
+@media (max-width: 560px) { .step.branch .opts { flex-direction: column; align-items: center; } .opt { height: 22px; padding: 0 7px; font-size: 9px; } }

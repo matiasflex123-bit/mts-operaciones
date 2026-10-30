@@ -18,7 +18,7 @@ const STATUS_META = {
 };
 const STATUSES = {
   proyecto: ['nuevo', 'abastecimiento', 'proceso', 'facturacion', 'finalizado'],
-  levantamiento: ['visita_pendiente', 'visita_realizada', 'aprobado', 'rechazado'],
+  levantamiento: ['visita_pendiente', 'visita_realizada', 'aprobado', 'rechazado', 'finalizado'],
   mantencion: ['activa', 'pausada', 'finalizada'],
 };
 const KIND = {
@@ -526,7 +526,7 @@ async function viewRecord(id, keepScroll = false) {
   const origin = r.fromLevantamiento ? S.records.find((x) => x.id === r.fromLevantamiento) : null;
 
   // Línea de estados
-  const pipe = statuses.map((s, i) => {
+  const pipe = r.kind === 'levantamiento' ? levPipe(r) : statuses.map((s, i) => {
     let cls = '';
     if (r.kind === 'mantencion') {
       cls = r.status === s ? 'cur' : '';
@@ -583,7 +583,7 @@ async function viewRecord(id, keepScroll = false) {
 
   app.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; app.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b)); drawTab(); }));
   if (isAdmin()) {
-    app.querySelectorAll('.step.can').forEach((b) => (b.onclick = () => statusModal(r, b.dataset.s)));
+    app.querySelectorAll('.step.can, .opt.can').forEach((b) => (b.onclick = () => statusModal(r, b.dataset.s)));
     document.getElementById('edit').onclick = () => recordForm(r.kind, r);
     document.getElementById('del').onclick = async () => {
       if (await confirmModal({ title: `Eliminar ${K.one.toLowerCase()}`, text: `Se eliminará <b>${esc(r.code)} · ${esc(r.name)}</b> con toda su bitácora, equipos y fotos. Esta acción no se puede deshacer.`, okLabel: 'Eliminar definitivamente', danger: true })) {
@@ -602,11 +602,31 @@ async function viewRecord(id, keepScroll = false) {
 }
 const reloadRecord = () => viewRecord(REC.record.id, true);
 
+// Línea de estados del levantamiento: 1 → 2 → (Aprobado | Rechazado) → Finalizado
+function levPipe(r) {
+  const rank = { visita_pendiente: 0, visita_realizada: 1, aprobado: 2, rechazado: 2, finalizado: 3 }[r.status];
+  const decided = r.status === 'aprobado' || r.status === 'rechazado' ? r.status
+    : r.status === 'finalizado' ? ([...r.statusHistory].reverse().find((h) => h.status === 'aprobado' || h.status === 'rechazado') || {}).status : null;
+  const can = (s) => isAdmin() && r.status !== s;
+  const step = (s, idx) => {
+    const m = STATUS_META[s];
+    const cls = idx < rank ? 'done' : idx === rank ? 'cur' : '';
+    const sym = cls === 'done' || (s === 'finalizado' && cls === 'cur') ? ICON.check : String(idx + 1).padStart(2, '0');
+    return `<button class="step ${cls} ${can(s) ? 'can' : ''}" style="--c:${m.c}" data-s="${s}" ${isAdmin() ? '' : 'tabindex="-1"'} title="${can(s) ? 'Cambiar a: ' + esc(m.label) : esc(m.label)}"><span class="dot">${sym}</span><span class="nm">${esc(m.label)}</span></button>`;
+  };
+  const dc = decided ? STATUS_META[decided].c : 'var(--line-2)';
+  const dCls = rank > 2 ? 'done' : rank === 2 ? 'cur' : '';
+  const opt = (s) => `<button class="opt ${decided === s ? 'on' : ''} ${can(s) ? 'can' : ''}" style="--c:${STATUS_META[s].c}" data-s="${s}" ${isAdmin() ? '' : 'tabindex="-1" disabled'}>${s === 'aprobado' ? ICON.check : ICON.x}${esc(STATUS_META[s].label)}</button>`;
+  const decision = `<div class="step branch ${dCls}" style="--c:${dc}"><span class="dot">${decided === 'aprobado' ? ICON.check : decided === 'rechazado' ? ICON.x : '03'}</span><span class="opts">${opt('aprobado')}${opt('rechazado')}</span></div>`;
+  return step('visita_pendiente', 0) + step('visita_realizada', 1) + decision + step('finalizado', 3);
+}
+
 function statusModal(r, s) {
   const m = STATUS_META[s];
   openModal({
     title: 'Cambiar estado',
     body: `<div class="row wrap" style="gap:12px">${chip(r.status)}<span class="dim">${ICON.arrow.replace('<svg', '<svg style="width:18px;height:18px"')}</span>${chip(s)}</div>
+      ${r.kind === 'levantamiento' && s === 'aprobado' ? (r.toProyecto && S.records.some((x) => x.id === r.toProyecto) ? '<div class="note">Este levantamiento ya tiene su proyecto creado; no se creará otro.</div>' : '<div class="note"><b>Se creará automáticamente un proyecto nuevo</b> con la información de este levantamiento y sus equipos registrados.</div>') : ''}
       <label class="field"><span>Nota (opcional)</span><textarea class="input" id="sn" maxlength="300" placeholder="Ej: Material recibido completo, se agenda instalación para el lunes"></textarea></label>
       <p class="err" id="se"></p>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="sok" style="background:${m.c};border-color:${m.c}">Cambiar a ${esc(m.label)}</button>`,
@@ -614,7 +634,13 @@ function statusModal(r, s) {
       el.querySelector('#sok').onclick = async () => {
         try {
           await api(`/api/records/${r.id}/status`, { method: 'POST', body: { status: s, note: el.querySelector('#sn').value } });
-          close(); toast(`Estado: ${m.label}`); reloadRecord();
+          close(); toast(`Estado: ${m.label}`);
+          await refreshRecords().catch(() => {});
+          await reloadRecord();
+          if (r.kind === 'levantamiento' && s === 'aprobado' && REC.record.toProyecto && !r.toProyecto) {
+            const pr = S.records.find((x) => x.id === REC.record.toProyecto);
+            toast(`Proyecto ${pr ? pr.code : ''} creado automáticamente en Proyectos`, 'var(--accent)');
+          }
         } catch (e) { el.querySelector('#se').textContent = e.message; }
       };
     },

@@ -177,7 +177,7 @@
         ]);
         const STATUSES = {
           proyecto: ['nuevo', 'abastecimiento', 'proceso', 'facturacion', 'finalizado'],
-          levantamiento: ['visita_pendiente', 'visita_realizada', 'aprobado', 'rechazado'],
+          levantamiento: ['visita_pendiente', 'visita_realizada', 'aprobado', 'rechazado', 'finalizado'],
           mantencion: ['activa', 'pausada', 'finalizada'],
         };
         const byStatus = {};
