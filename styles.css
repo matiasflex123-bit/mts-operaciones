@@ -248,6 +248,10 @@ select.input option { background: var(--bg-2); }
 @media (max-width: 520px) { .sbar { grid-template-columns: 110px 1fr 28px; } }
 
 .feed { display: grid; }
+.dash-feed { max-height: 360px; overflow-y: auto; padding-right: 6px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.dash-feed::-webkit-scrollbar { width: 6px; }
+.dash-feed::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
+@media (max-width: 760px) { .dash-feed { max-height: 300px; } }
 .feed-i { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 12px 0; border-bottom: 1px dashed var(--line); }
 .feed-i:last-child { border-bottom: 0; }
 .feed-i .t { font-size: 14px; }

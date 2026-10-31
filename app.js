@@ -403,7 +403,7 @@ async function viewDashboard() {
       <section class="panel hud">
         <div class="panel-h"><h2 class="grow">Actividad reciente</h2><span class="label">Tiempo real</span></div>
         <div class="panel-b" style="padding-top:4px;padding-bottom:4px">
-          ${d.recent.length ? `<div class="feed">${d.recent.slice(0, 18).map((a) => {
+          ${d.recent.length ? `<div class="feed dash-feed">${d.recent.slice(0, 30).map((a) => {
             const u = userById(a.userId);
             return `<div class="feed-i">${avatar(u)}<div style="min-width:0">
               <div class="t"><b>${esc(u.name)}</b> ${esc(a.action)} ${a.record ? `en <a href="#/r/${a.record.id}">${esc(a.record.code)} · ${esc(a.record.name)}</a>` : ''}</div>
