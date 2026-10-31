@@ -56,6 +56,7 @@ const ICON = {
   next: I('<path d="m9 18 6-6-6-6"/>'),
   msg: I('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>'),
   cam: I('<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/>'),
+  pdf: I('<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>'),
   img: I('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>'),
   chip: I('<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>'),
   info: I('<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>'),
@@ -173,6 +174,21 @@ function resizeImage(file, max = 1800, q = 0.82) {
     img.src = url;
   });
 }
+
+// PDF adjuntos: se guardan en el mismo almacenamiento que las fotos, con extensión .pdf
+const PDF_MAX = 20 * 1024 * 1024;
+const isDoc = (p) => /\.pdf$/i.test((p && p.path) || '');
+const docName = (p) => { const f = String(p.path || '').split('/').pop(); return f.includes('__') ? f.slice(f.indexOf('__') + 2) : 'documento.pdf'; };
+function readPdf(file) {
+  return new Promise((resolve, reject) => {
+    if (file.size > PDF_MAX) return reject(new Error(`${file.name} supera los 20 MB`));
+    const fr = new FileReader();
+    fr.onload = () => resolve({ pdf: true, name: file.name, data: fr.result });
+    fr.onerror = () => reject(new Error('No se pudo leer ' + file.name));
+    fr.readAsDataURL(file);
+  });
+}
+const docList = (docs) => docs.length ? `<div class="docs">${docs.map((p) => `<a class="doc" href="${esc(p.url)}" target="_blank" rel="noopener">${ICON.pdf}<span>${esc(docName(p))}</span><b>Abrir</b></a>`).join('')}</div>` : '';
 
 // ───────────────────────── Modales ─────────────────────────
 const modalRoot = document.getElementById('modal-root');
@@ -673,7 +689,8 @@ function tabLog(box) {
         <div class="tools">${canEdit && e.text ? `<button class="btn ghost icon sm" data-edit title="Editar" aria-label="Editar">${ICON.edit}</button>` : ''}${isAdmin() ? `<button class="btn ghost icon sm" data-del title="Eliminar" aria-label="Eliminar">${ICON.trash}</button>` : ''}</div>
       </div>
       ${e.text ? `<div class="txt">${esc(e.text)}</div>` : ''}
-      ${ph.length ? `<div class="pgrid">${ph.map((p) => `<button data-ph="${p.id}" aria-label="Ver foto"><img loading="lazy" src="${esc(p.url)}" alt=""></button>`).join('')}</div>` : ''}
+      ${ph.some((p) => !isDoc(p)) ? `<div class="pgrid">${ph.filter((p) => !isDoc(p)).map((p) => `<button data-ph="${p.id}" aria-label="Ver foto"><img loading="lazy" src="${esc(p.url)}" alt=""></button>`).join('')}</div>` : ''}
+      ${docList(ph.filter(isDoc))}
     </article>`;
   }).join('');
 
@@ -684,7 +701,7 @@ function tabLog(box) {
       <textarea class="input" id="ct" maxlength="5000" placeholder="${C.type === 'mantencion' ? 'Qué se revisó: cámaras operativas, grabación, limpieza, ajustes realizados… (al publicar se calcula la próxima fecha)' : C.type === 'avance' ? 'Qué se avanzó hoy: puntos instalados, cableado, configuración…' : C.type === 'incidencia' ? 'Describe el problema encontrado…' : C.type === 'material' ? 'Material usado o faltante: cantidades, modelos…' : 'Escribe un comentario para el equipo…'}">${esc(C.draft || '')}</textarea>
       <div class="thumbs" id="thumbs"></div>
       <div class="actions">
-        <label class="btn" style="cursor:pointer">${ICON.cam} Agregar fotos<input type="file" id="cf" accept="image/*" multiple hidden></label>
+        <label class="btn" style="cursor:pointer">${ICON.cam} Fotos o PDF<input type="file" id="cf" accept="image/*,application/pdf,.pdf" multiple hidden></label>
         <span class="dim grow" style="font-size:12.5px">Se publicará como <b style="color:var(--ink)">${esc(S.me.name)}</b> con fecha y hora</span>
         <button class="btn primary" id="cs">Publicar</button>
       </div>
@@ -692,7 +709,7 @@ function tabLog(box) {
     <div class="entries">${items || `<div class="empty panel">${ICON.msg}<p>Aún no hay registros en la bitácora.<br><span class="dim">Los avances diarios, comentarios y fotos aparecerán aquí.</span></p></div>`}</div>`;
 
   const drawThumbs = () => {
-    box.querySelector('#thumbs').innerHTML = C.photos.map((p, i) => `<div class="th"><img src="${p}" alt=""><button data-rm="${i}" aria-label="Quitar">×</button></div>`).join('');
+    box.querySelector('#thumbs').innerHTML = C.photos.map((p, i) => `<div class="th ${p.pdf ? 'pdf' : ''}">${p.pdf ? `${ICON.pdf}<small>${esc(p.name)}</small>` : `<img src="${p}" alt="">`}<button data-rm="${i}" aria-label="Quitar">×</button></div>`).join('');
     box.querySelectorAll('[data-rm]').forEach((b) => (b.onclick = () => { C.photos.splice(Number(b.dataset.rm), 1); drawThumbs(); }));
   };
   drawThumbs();
@@ -700,13 +717,15 @@ function tabLog(box) {
   box.querySelectorAll('[data-type]').forEach((b) => (b.onclick = () => { C.type = b.dataset.type; tabLog(box); }));
   box.querySelector('#cf').addEventListener('change', async (e) => {
     const files = [...e.target.files].slice(0, 12 - C.photos.length);
-    for (const f of files) { try { C.photos.push(await resizeImage(f)); } catch (ex) { toastErr(ex); } }
+    for (const f of files) {
+      try { C.photos.push(f.type === 'application/pdf' || /\.pdf$/i.test(f.name) ? await readPdf(f) : await resizeImage(f)); } catch (ex) { toastErr(ex); }
+    }
     e.target.value = ''; drawThumbs();
   });
   box.querySelector('#cs').onclick = async (ev) => {
     const text = box.querySelector('#ct').value.trim();
-    if (!text && !C.photos.length) return toast('Escribe algo o agrega una foto', 'var(--amber)');
-    ev.target.disabled = true; ev.target.textContent = C.photos.length ? 'Subiendo fotos…' : 'Publicando…';
+    if (!text && !C.photos.length) return toast('Escribe algo o agrega una foto o PDF', 'var(--amber)');
+    ev.target.disabled = true; ev.target.textContent = C.photos.length ? 'Subiendo archivos…' : 'Publicando…';
     try {
       await api(`/api/records/${REC.record.id}/entries`, { method: 'POST', body: { type: C.type, text, photos: C.photos } });
       C.photos = []; C.draft = '';
@@ -715,7 +734,7 @@ function tabLog(box) {
   };
   box.querySelectorAll('[data-ph]').forEach((b) => (b.onclick = () => {
     const entryEl = b.closest('.entry'); const e = REC.entries.find((x) => x.id === entryEl.dataset.id);
-    const ph = e.photos.map((id) => byId[id]).filter(Boolean);
+    const ph = e.photos.map((id) => byId[id]).filter((p) => p && !isDoc(p));
     lightbox(ph, ph.findIndex((p) => p.id === b.dataset.ph));
   }));
   box.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => {
@@ -816,15 +835,19 @@ function equipForm(eq) {
 
 // ── Fotos ──
 function tabPhotos(box) {
-  const ph = [...REC.photos].reverse();
-  box.innerHTML = ph.length ? `<div class="gallery">${ph.map((p, i) => `<figure class="panel"><button data-i="${i}" aria-label="Ver foto"><img loading="lazy" src="${esc(p.url)}" alt=""></button>
+  const all = [...REC.photos].reverse();
+  const ph = all.filter((p) => !isDoc(p));
+  const docs = all.filter(isDoc);
+  const docsHtml = docs.length ? `<h3 class="label" style="margin:0 0 10px">Documentos PDF</h3><div class="docs" style="margin-bottom:22px">${docs.map((p) => `<div class="doc">${ICON.pdf}<a href="${esc(p.url)}" target="_blank" rel="noopener"><span>${esc(docName(p))}</span></a><span class="mono dim" style="font-size:11px">${esc(userById(p.userId).name.split(' ')[0])} · ${esc(fDate(p.at))}</span>${isAdmin() ? `<button class="btn ghost icon sm" data-del="${p.id}" style="width:26px;height:26px" aria-label="Eliminar PDF">${ICON.trash}</button>` : ''}</div>`).join('')}</div>` : '';
+  box.innerHTML = !all.length ? '' : docsHtml + (ph.length ? `<h3 class="label" style="margin:0 0 10px">Fotos</h3>` : '');
+  box.innerHTML += ph.length ? `<div class="gallery">${ph.map((p, i) => `<figure class="panel"><button data-i="${i}" aria-label="Ver foto"><img loading="lazy" src="${esc(p.url)}" alt=""></button>
     <figcaption>${esc(userById(p.userId).name.split(' ')[0])}<span class="mono">${esc(fDate(p.at))} ${esc(fTime(p.at))}</span>${isAdmin() ? `<button class="btn ghost icon sm" data-del="${p.id}" style="width:26px;height:26px" aria-label="Eliminar foto">${ICON.trash}</button>` : ''}</figcaption></figure>`).join('')}</div>`
-    : `<div class="empty panel">${ICON.img}<p>Aún no hay fotos.<br><span class="dim">Las fotos se suben desde la Bitácora, junto a un comentario o avance.</span></p><button class="btn" id="go">${ICON.cam} Ir a la bitácora</button></div>`;
+    : all.length ? '' : `<div class="empty panel">${ICON.img}<p>Aún no hay fotos ni documentos.<br><span class="dim">Las fotos y PDF se suben desde la Bitácora, junto a un comentario o avance.</span></p><button class="btn" id="go">${ICON.cam} Ir a la bitácora</button></div>`;
   box.querySelectorAll('[data-i]').forEach((b) => (b.onclick = () => lightbox(ph, Number(b.dataset.i))));
   const go = box.querySelector('#go'); if (go) go.onclick = () => app.querySelector('[data-tab="bitacora"]').click();
   box.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async () => {
-    if (await confirmModal({ title: 'Eliminar foto', text: 'La foto se eliminará definitivamente.', okLabel: 'Eliminar', danger: true })) {
-      try { await api(`/api/photos/${b.dataset.del}`, { method: 'DELETE' }); toast('Foto eliminada'); reloadRecord(); } catch (e) { toastErr(e); }
+    if (await confirmModal({ title: 'Eliminar archivo', text: 'El archivo se eliminará definitivamente.', okLabel: 'Eliminar', danger: true })) {
+      try { await api(`/api/photos/${b.dataset.del}`, { method: 'DELETE' }); toast('Archivo eliminado'); reloadRecord(); } catch (e) { toastErr(e); }
     }
   }));
 }

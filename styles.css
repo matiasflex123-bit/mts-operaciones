@@ -398,6 +398,18 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .eq-card dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 760px) { .tbl-wrap { display: none; } .eq-cards { display: grid; } }
 
+/* Documentos PDF */
+.thumbs .th.pdf { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 6px; background: var(--bg-2); color: var(--accent, #f07a2a); }
+.thumbs .th.pdf svg { width: 26px; height: 26px; }
+.thumbs .th.pdf small { font-size: 9.5px; color: var(--muted); width: 100%; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.doc { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-2); color: var(--ink); text-decoration: none; min-width: 0; }
+.doc svg { width: 22px; height: 22px; flex: none; color: var(--accent, #f07a2a); }
+.doc span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.doc a { flex: 1; min-width: 0; color: inherit; text-decoration: none; display: flex; }
+.doc b { font-size: 12px; color: var(--accent, #f07a2a); }
+a.doc:hover, .doc a:hover span { text-decoration: underline; }
+
 /* Galería */
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .gallery figure { margin: 0; overflow: hidden; }

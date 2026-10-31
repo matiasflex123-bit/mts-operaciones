@@ -25,7 +25,8 @@
     if (/row-level security|permission denied/i.test(m)) return 'No tienes permiso para realizar esta acción';
     if (/JWT|not authenticated|Auth session missing/i.test(m)) return 'Sesión expirada, vuelve a ingresar';
     if (/Failed to fetch|NetworkError|network/i.test(m)) return 'Sin conexión con el servidor. Revisa tu internet.';
-    if (/payload too large|exceeded the maximum/i.test(m)) return 'La foto es demasiado grande';
+    if (/payload too large|exceeded the maximum/i.test(m)) return 'El archivo es demasiado grande (máximo 20 MB)';
+    if (/mime type|invalid_mime/i.test(m)) return 'Tipo de archivo no permitido';
     return m || 'Ocurrió un error';
   }
   function check({ data, error, count }) {
@@ -245,14 +246,17 @@
           if (!text && !photos.length) fail(400, 'Escribe un comentario o adjunta una foto');
           const e = check(await sb.from('entries').insert({ record_id: id, type: body.type || 'comentario', text, user_id: me.id }).select().single());
           let failed = 0;
-          for (const dataUrl of photos) {
-            const path = `${id}/${e.id}/${uuid()}.jpg`;
-            const up = await sb.storage.from(BUCKET).upload(path, dataUrlToBlob(dataUrl), { contentType: 'image/jpeg', upsert: false });
+          for (const item of photos) {
+            const isPdf = item && typeof item === 'object' && item.pdf;
+            const dataUrl = isPdf ? item.data : item;
+            const safe = isPdf ? String(item.name || 'documento.pdf').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w.\-]+/g, '_').replace(/\.pdf$/i, '').slice(0, 80) : '';
+            const path = isPdf ? `${id}/${e.id}/${uuid()}__${safe || 'documento'}.pdf` : `${id}/${e.id}/${uuid()}.jpg`;
+            const up = await sb.storage.from(BUCKET).upload(path, dataUrlToBlob(dataUrl), { contentType: isPdf ? 'application/pdf' : 'image/jpeg', upsert: false });
             if (up.error) { failed++; continue; }
             const ins = await sb.from('photos').insert({ record_id: id, entry_id: e.id, path, user_id: me.id });
             if (ins.error) failed++;
           }
-          if (failed) fail(400, `Se publicó el texto, pero ${failed} foto(s) no se pudieron subir`);
+          if (failed) fail(400, `Se publicó el texto, pero ${failed} archivo(s) no se pudieron subir`);
           return { entry: toCamel(e) };
         }
         if (sub === 'equipment') {
