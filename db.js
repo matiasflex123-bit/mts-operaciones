@@ -99,6 +99,27 @@
     meCache = toCamel(p);
     return meCache;
   }
+  // ── Menciones (@USUARIO) ──
+  const MENTION_RE = /(^|[^\w@])@([A-Za-z0-9_.\-]+)/g;
+  function mentionHandles(text) {
+    const s = new Set();
+    String(text || '').replace(MENTION_RE, (_, a, h) => { s.add(h.replace(/[.\-_]+$/, '').toUpperCase()); return _; });
+    return s;
+  }
+  // Crea un aviso para cada usuario mencionado por primera vez en el texto (no falla el guardado si algo sale mal)
+  async function notifyMentions(me, text, oldText, { recordId, entryId = null, context }) {
+    try {
+      const before = mentionHandles(oldText);
+      const handles = [...mentionHandles(text)].filter((h) => !before.has(h));
+      if (!handles.length) return 0;
+      const { data } = await sb.from('profiles').select('id,username,active').in('username', handles);
+      const ids = (data || []).filter((u) => u.active && u.id !== me.id).map((u) => u.id);
+      if (!ids.length) return 0;
+      const snippet = String(text || '').trim().slice(0, 280);
+      const { error } = await sb.from('mentions').insert(ids.map((u) => ({ user_id: u, by_user: me.id, record_id: recordId, entry_id: entryId, context, snippet })));
+      return error ? 0 : ids.length;
+    } catch { return 0; }
+  }
   const requireAdmin = () => { if (!meCache || meCache.role !== 'admin') fail(403, 'Solo un administrador puede realizar esta acción'); };
 
   function summarize(r) {
@@ -204,6 +225,7 @@
         if (!String(body.name || '').trim()) fail(400, 'El nombre es obligatorio');
         const row = { kind: body.kind, status: ({ proyecto: 'nuevo', levantamiento: 'visita_pendiente', mantencion: 'activa' })[body.kind], ...pick(body, RECORD_FIELDS) };
         const r = check(await sb.from('records').insert(row).select().single());
+        await notifyMentions(me, [r.description, r.network].join('\n'), '', { recordId: r.id, context: 'ficha' });
         return { record: toCamel(r) };
       }
       if (seg[1] === 'records' && seg[2]) {
@@ -228,7 +250,9 @@
         if (!sub && method === 'PATCH') {
           requireAdmin();
           if ('name' in body && !String(body.name).trim()) fail(400, 'El nombre es obligatorio');
+          const prev = check(await sb.from('records').select('description,network').eq('id', id).maybeSingle()) || {};
           const r = check(await sb.from('records').update(pick(body, RECORD_FIELDS)).eq('id', id).select().single());
+          await notifyMentions(me, [r.description, r.network].join('\n'), [prev.description, prev.network].join('\n'), { recordId: id, context: 'ficha' });
           return { record: toCamel(r) };
         }
         if (!sub && method === 'DELETE') {
@@ -238,7 +262,12 @@
           check(await sb.from('records').delete().eq('id', id));
           return { ok: true };
         }
-        if (sub === 'status') { requireAdmin(); check(await sb.rpc('set_status', { p_record: id, p_status: body.status, p_note: body.note || '' })); return { ok: true }; }
+        if (sub === 'status') {
+          requireAdmin();
+          check(await sb.rpc('set_status', { p_record: id, p_status: body.status, p_note: body.note || '' }));
+          await notifyMentions(me, body.note, '', { recordId: id, context: 'estado' });
+          return { ok: true };
+        }
         if (sub === 'convert') { requireAdmin(); const nid = check(await sb.rpc('convert_levantamiento', { p_id: id })); return { record: { id: nid, code: 'Proyecto' } }; }
         if (sub === 'entries') {
           const text = String(body.text || '').trim().slice(0, 5000);
@@ -256,6 +285,7 @@
             const ins = await sb.from('photos').insert({ record_id: id, entry_id: e.id, path, user_id: me.id });
             if (ins.error) failed++;
           }
+          await notifyMentions(me, text, '', { recordId: id, entryId: e.id, context: body.type || 'comentario' });
           if (failed) fail(400, `Se publicó el texto, pero ${failed} archivo(s) no se pudieron subir`);
           return { entry: toCamel(e) };
         }
@@ -263,6 +293,7 @@
           const row = pick(body, EQUIP_FIELDS);
           if (!row.type && !row.ip && !row.model) fail(400, 'Completa al menos el tipo, modelo o IP');
           const eq = check(await sb.from('equipment').insert({ record_id: id, created_by: me.id, ...row }).select().single());
+          await notifyMentions(me, eq.notes, '', { recordId: id, context: 'equipo' });
           return { equipment: toCamel(eq) };
         }
       }
@@ -270,8 +301,10 @@
       // Bitácora
       if (seg[1] === 'entries' && seg[2]) {
         if (method === 'PATCH') {
+          const prev = check(await sb.from('entries').select('text').eq('id', seg[2]).maybeSingle()) || {};
           const r = check(await sb.from('entries').update({ text: String(body.text || '').slice(0, 5000) }).eq('id', seg[2]).select());
           if (!r.length) fail(403, 'Solo puedes editar tus propios comentarios');
+          await notifyMentions(me, r[0].text, prev.text, { recordId: r[0].record_id, entryId: r[0].id, context: r[0].type });
           return { entry: toCamel(r[0]) };
         }
         if (method === 'DELETE') {
@@ -285,8 +318,10 @@
       // Equipos
       if (seg[1] === 'equipment' && seg[2]) {
         if (method === 'PATCH') {
+          const prev = check(await sb.from('equipment').select('notes').eq('id', seg[2]).maybeSingle()) || {};
           const r = check(await sb.from('equipment').update(pick(body, EQUIP_FIELDS)).eq('id', seg[2]).select());
           if (!r.length) fail(403, 'Solo puedes editar los equipos que tú agregaste');
+          await notifyMentions(me, r[0].notes, prev.notes, { recordId: r[0].record_id, context: 'equipo' });
           return { equipment: toCamel(r[0]) };
         }
         if (method === 'DELETE') { requireAdmin(); check(await sb.from('equipment').delete().eq('id', seg[2])); return { ok: true }; }
@@ -307,12 +342,25 @@
         const items = rows.map((e) => ({ ...toCamel(e), record: e.records || null, unread: !!(seen && e.at > seen) }));
         return { items, unread: items.filter((x) => x.unread).length, seenAt: seen };
       }
+      // Menciones que recibí
+      if (p === '/api/mentions' && method === 'GET') {
+        const { data, error } = await sb.from('mentions').select('*, records(id,code,name,kind)').eq('user_id', me.id).order('at', { ascending: false }).limit(50);
+        if (error) return { items: [], unread: 0 }; // tabla aún no creada
+        const items = data.map((m) => ({ ...toCamel(m), record: m.records || null, unread: !m.seen_at }));
+        return { items, unread: items.filter((x) => x.unread).length };
+      }
+      if (p === '/api/mentions/seen' && method === 'POST') {
+        let q = sb.from('mentions').update({ seen_at: new Date().toISOString() }).eq('user_id', me.id).is('seen_at', null);
+        if (body.id) q = q.eq('id', body.id);
+        check(await q);
+        return { ok: true };
+      }
       if (p === '/api/notifications/seen') { check(await sb.rpc('mark_notifications_seen')); return { ok: true }; }
 
       // Respaldo (descarga JSON con todos los datos, sin fotos)
       if (p === '/api/backup') {
         requireAdmin();
-        const tables = ['profiles', 'records', 'status_history', 'entries', 'equipment', 'photos', 'activity'];
+        const tables = ['profiles', 'records', 'status_history', 'entries', 'equipment', 'photos', 'activity', 'mentions'];
         const out = { generado: new Date().toISOString() };
         for (const t of tables) out[t] = check(await sb.from(t).select('*').limit(100000));
         return out;
@@ -357,7 +405,19 @@
       .subscribe();
   }
 
+  // Tiempo real: me mencionaron
+  let mentionChannel = null;
+  function watchMentions(userId, onInsert) {
+    if (!sb) return;
+    if (mentionChannel) { sb.removeChannel(mentionChannel); mentionChannel = null; }
+    if (!userId || !onInsert) return;
+    mentionChannel = sb.channel('mentions-' + userId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mentions', filter: `user_id=eq.${userId}` }, (payload) => onInsert(toCamel(payload.new)))
+      .subscribe();
+  }
+
   window.mtsApi = mtsApi;
+  window.mtsWatchMentions = watchMentions;
   window.mtsWatchAllEntries = watchAllEntries;
   window.mtsDownloadPhoto = downloadPhoto;
   window.mtsWatchRecord = watchRecord;
