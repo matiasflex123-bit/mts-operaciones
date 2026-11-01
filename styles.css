@@ -453,11 +453,14 @@ a.doc:hover, .doc a:hover span { text-decoration: underline; }
 /* ───────── Modal ───────── */
 .overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; background: rgba(4, 8, 16, .72); backdrop-filter: blur(4px); animation: fade .15s ease; }
 @keyframes fade { from { opacity: 0; } }
-.modal { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto; animation: rise .2s ease; }
+.modal { width: min(560px, 100%); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; overflow: visible; animation: rise .2s ease; }
+.modal > .panel-h, .modal > .foot { flex: none; }
 .modal.wide { width: min(760px, 100%); }
 @keyframes rise { from { transform: translateY(12px); opacity: 0; } }
 .modal .panel-h h2 { font-size: 16px; text-transform: uppercase; letter-spacing: .1em; }
-.modal .panel-b { display: grid; gap: 14px; }
+.modal .panel-b { display: grid; gap: 14px; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.modal .panel-b::-webkit-scrollbar { width: 6px; }
+.modal .panel-b::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
 .modal .foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 18px; border-top: 1px solid var(--line); }
 .err { color: var(--red); font-size: 13px; margin: 0; }
 .err:empty { display: none; }
