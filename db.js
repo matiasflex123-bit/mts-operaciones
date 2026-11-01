@@ -231,20 +231,22 @@
       if (seg[1] === 'records' && seg[2]) {
         const id = seg[2]; const sub = seg[3];
         if (!sub && method === 'GET') {
-          const [rec, ents, eqs, phs, hist, act] = await Promise.all([
+          const [rec, ents, eqs, phs, hist, act, acks] = await Promise.all([
             sb.from('records').select('*, entries(count), photos(count), equipment(count)').eq('id', id).maybeSingle(),
             sb.from('entries').select('*').eq('record_id', id).order('at'),
             sb.from('equipment').select('*').eq('record_id', id).order('created_at'),
             sb.from('photos').select('*').eq('record_id', id).order('at'),
             sb.from('status_history').select('*').eq('record_id', id).order('id'),
             sb.from('activity').select('*').eq('record_id', id).order('id', { ascending: false }).limit(100),
+            sb.from('entry_acks').select('entry_id,user_id,at').eq('record_id', id).order('at'),
           ]);
           const r = check(rec);
           if (!r) fail(404, 'Registro no encontrado');
           const record = summarize(r);
           record.statusHistory = check(hist).map(toCamel);
           const photos = await withUrls(check(phs));
-          const entries = check(ents).map((e) => ({ ...toCamel(e), photos: photos.filter((x) => x.entryId === e.id).map((x) => x.id) }));
+          const ackRows = acks.error ? [] : acks.data; // la tabla puede no existir todavía
+          const entries = check(ents).map((e) => ({ ...toCamel(e), photos: photos.filter((x) => x.entryId === e.id).map((x) => x.id), acks: ackRows.filter((a) => a.entry_id === e.id).map((a) => ({ userId: a.user_id, at: a.at })) }));
           return { record, entries, equipment: check(eqs).map(toCamel), photos, activity: check(act).map(toCamel) };
         }
         if (!sub && method === 'PATCH') {
@@ -299,6 +301,16 @@
       }
 
       // Bitácora
+      // "Visto" en un registro de la bitácora
+      if (seg[1] === 'entries' && seg[2] && seg[3] === 'ack' && method === 'POST') {
+        if (body.on === false) check(await sb.from('entry_acks').delete().eq('entry_id', seg[2]).eq('user_id', me.id));
+        else {
+          const ent = check(await sb.from('entries').select('record_id').eq('id', seg[2]).maybeSingle());
+          if (!ent) fail(404, 'Registro no encontrado');
+          check(await sb.from('entry_acks').upsert({ entry_id: seg[2], user_id: me.id, record_id: ent.record_id }, { onConflict: 'entry_id,user_id', ignoreDuplicates: true }));
+        }
+        return { ok: true };
+      }
       if (seg[1] === 'entries' && seg[2]) {
         if (method === 'PATCH') {
           const prev = check(await sb.from('entries').select('text').eq('id', seg[2]).maybeSingle()) || {};
@@ -391,6 +403,7 @@
       .on('postgres_changes', { event: '*', schema: 'public', table: 'entries', filter: `record_id=eq.${recordId}` }, fire)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'equipment', filter: `record_id=eq.${recordId}` }, fire)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'records', filter: `id=eq.${recordId}` }, fire)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'entry_acks', filter: `record_id=eq.${recordId}` }, fire)
       .subscribe();
   }
 

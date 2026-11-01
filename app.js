@@ -705,6 +705,7 @@ function tabLog(box) {
       ${e.text ? `<div class="txt">${richText(e.text)}</div>` : ''}
       ${ph.some((p) => !isDoc(p)) ? `<div class="pgrid">${ph.filter((p) => !isDoc(p)).map((p) => `<button data-ph="${p.id}" aria-label="Ver foto"><img loading="lazy" src="${esc(p.url)}" alt=""></button>`).join('')}</div>` : ''}
       ${docList(ph.filter(isDoc))}
+      ${ackBar(e)}
     </article>`;
   }).join('');
 
@@ -750,6 +751,17 @@ function tabLog(box) {
     const entryEl = b.closest('.entry'); const e = REC.entries.find((x) => x.id === entryEl.dataset.id);
     const ph = e.photos.map((id) => byId[id]).filter((p) => p && !isDoc(p));
     lightbox(ph, ph.findIndex((p) => p.id === b.dataset.ph));
+  }));
+  box.querySelectorAll('[data-ack]').forEach((b) => (b.onclick = async () => {
+    const e = REC.entries.find((x) => x.id === b.closest('.entry').dataset.id);
+    const on = !(e.acks || []).some((a) => a.userId === S.me.id);
+    e.acks = on ? [...(e.acks || []), { userId: S.me.id, at: new Date().toISOString() }] : (e.acks || []).filter((a) => a.userId !== S.me.id);
+    tabLog(box);
+    try { await api(`/api/entries/${e.id}/ack`, { method: 'POST', body: { on } }); } catch (ex) { toastErr(ex); reloadRecord(); }
+  }));
+  box.querySelectorAll('[data-acklist]').forEach((b) => (b.onclick = () => {
+    const e = REC.entries.find((x) => x.id === b.closest('.entry').dataset.id);
+    openModal({ title: 'Visto por', body: `<div class="nlist" style="margin:0 -18px -18px">${(e.acks || []).map((a) => { const u = userById(a.userId); return `<div class="nitem">${avatar(u)}<div style="flex:1"><div class="t"><b>${esc(u.name)}</b></div><div class="d">${esc(fDateTime(a.at))}</div></div></div>`; }).join('')}</div>` });
   }));
   box.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => {
     const e = REC.entries.find((x) => x.id === b.closest('.entry').dataset.id);
@@ -1199,6 +1211,19 @@ async function openNotifications() {
     },
   });
   if (isAdmin() && S.notif.unread) { api('/api/notifications/seen', { method: 'POST' }).then(() => { S.notif.unread = 0; updateBadges(); }).catch(() => {}); }
+}
+
+// ───────────────────────── "Visto" en la bitácora ─────────────────────────
+function ackBar(e) {
+  const acks = e.acks || [];
+  const mine = acks.some((a) => a.userId === S.me.id);
+  const own = e.userId === S.me.id;
+  const names = acks.map((a) => userById(a.userId).name.split(' ')[0]);
+  const label = !acks.length ? '' : names.length <= 3 ? names.join(', ') : `${names.slice(0, 2).join(', ')} y ${names.length - 2} más`;
+  return `<div class="ackbar">
+    ${own ? '' : `<button class="ack-btn ${mine ? 'on' : ''}" data-ack title="${mine ? 'Quitar visto' : 'Marcar como visto'}">${ICON.check}${mine ? 'Visto' : 'Marcar visto'}</button>`}
+    ${acks.length ? `<button class="ack-who" data-acklist title="Ver quién lo vio"><span class="ack-av">${acks.slice(0, 4).map((a) => avatar(userById(a.userId))).join('')}</span>Visto por ${esc(label)}</button>` : own ? '<span class="ack-none">Nadie lo ha marcado como visto aún</span>' : ''}
+  </div>`;
 }
 
 // ───────────────────────── Aviso al iniciar sesión ─────────────────────────
