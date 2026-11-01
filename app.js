@@ -311,6 +311,7 @@ function renderLogin() {
       const d = await api('/api/login', { method: 'POST', body: formData(e.target) });
       S.me = d.user;
       await boot();
+      welcomeNotice();
     } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
   });
 }
@@ -1198,6 +1199,23 @@ async function openNotifications() {
     },
   });
   if (isAdmin() && S.notif.unread) { api('/api/notifications/seen', { method: 'POST' }).then(() => { S.notif.unread = 0; updateBadges(); }).catch(() => {}); }
+}
+
+// ───────────────────────── Aviso al iniciar sesión ─────────────────────────
+async function welcomeNotice() {
+  await refreshMentions();
+  const n = S.ment.unread;
+  openModal({
+    title: 'Aviso',
+    body: `<div style="text-align:center;padding:6px 4px">
+      <div style="width:56px;height:56px;margin:0 auto 14px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)">${ICON.bell.replace('<svg', '<svg style="width:28px;height:28px"')}</div>
+      <p style="margin:0 0 10px;font-size:16px;line-height:1.5">Por favor revisar la <b>campanita de notificaciones</b> si es que fuiste mencionado en algún proyecto.</p>
+      <p class="muted" style="margin:0">Atentamente, su jefecito Matías :)</p>
+      ${n ? `<div class="note" style="margin-top:16px;text-align:left">Tienes <b>${n} mención${n === 1 ? '' : 'es'} sin leer</b>.</div>` : ''}
+    </div>`,
+    foot: `<button class="btn" data-close>Entendido</button><button class="btn primary" id="wn-open">${ICON.bell} Ver notificaciones</button>`,
+    onMount: (el, close) => { el.querySelector('#wn-open').onclick = () => { close(); openNotifications(); }; },
+  });
 }
 
 // ───────────────────────── Autocompletar @menciones ─────────────────────────
