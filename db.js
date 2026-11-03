@@ -25,8 +25,7 @@
     if (/row-level security|permission denied/i.test(m)) return 'No tienes permiso para realizar esta acción';
     if (/JWT|not authenticated|Auth session missing/i.test(m)) return 'Sesión expirada, vuelve a ingresar';
     if (/Failed to fetch|NetworkError|network/i.test(m)) return 'Sin conexión con el servidor. Revisa tu internet.';
-    if (/payload too large|exceeded the maximum/i.test(m)) return 'El archivo es demasiado grande (máximo 20 MB)';
-    if (/mime type|invalid_mime/i.test(m)) return 'Tipo de archivo no permitido';
+    if (/payload too large|exceeded the maximum/i.test(m)) return 'La foto es demasiado grande';
     return m || 'Ocurrió un error';
   }
   function check({ data, error, count }) {
@@ -98,27 +97,6 @@
     if (!p.active) { await sb.auth.signOut(); fail(403, 'Este usuario está desactivado'); }
     meCache = toCamel(p);
     return meCache;
-  }
-  // ── Menciones (@USUARIO) ──
-  const MENTION_RE = /(^|[^\w@])@([A-Za-z0-9_.\-]+)/g;
-  function mentionHandles(text) {
-    const s = new Set();
-    String(text || '').replace(MENTION_RE, (_, a, h) => { s.add(h.replace(/[.\-_]+$/, '').toUpperCase()); return _; });
-    return s;
-  }
-  // Crea un aviso para cada usuario mencionado por primera vez en el texto (no falla el guardado si algo sale mal)
-  async function notifyMentions(me, text, oldText, { recordId, entryId = null, context }) {
-    try {
-      const before = mentionHandles(oldText);
-      const handles = [...mentionHandles(text)].filter((h) => !before.has(h));
-      if (!handles.length) return 0;
-      const { data } = await sb.from('profiles').select('id,username,active').in('username', handles);
-      const ids = (data || []).filter((u) => u.active && u.id !== me.id).map((u) => u.id);
-      if (!ids.length) return 0;
-      const snippet = String(text || '').trim().slice(0, 280);
-      const { error } = await sb.from('mentions').insert(ids.map((u) => ({ user_id: u, by_user: me.id, record_id: recordId, entry_id: entryId, context, snippet })));
-      return error ? 0 : ids.length;
-    } catch { return 0; }
   }
   const requireAdmin = () => { if (!meCache || meCache.role !== 'admin') fail(403, 'Solo un administrador puede realizar esta acción'); };
 
@@ -201,6 +179,7 @@
           proyecto: ['nuevo', 'abastecimiento', 'proceso', 'facturacion', 'finalizado'],
           levantamiento: ['visita_pendiente', 'visita_realizada', 'aprobado', 'rechazado', 'finalizado'],
           mantencion: ['activa', 'pausada', 'finalizada'],
+          reparacion: ['ingresada', 'diagnostico', 'reparacion', 'facturacion', 'finalizado'],
         };
         const byStatus = {};
         for (const k of Object.keys(STATUSES)) byStatus[k] = Object.fromEntries(STATUSES[k].map((s) => [s, 0]));
@@ -223,38 +202,33 @@
       if (p === '/api/records' && method === 'POST') {
         requireAdmin();
         if (!String(body.name || '').trim()) fail(400, 'El nombre es obligatorio');
-        const row = { kind: body.kind, status: ({ proyecto: 'nuevo', levantamiento: 'visita_pendiente', mantencion: 'activa' })[body.kind], ...pick(body, RECORD_FIELDS) };
+        const row = { kind: body.kind, status: ({ proyecto: 'nuevo', levantamiento: 'visita_pendiente', mantencion: 'activa', reparacion: 'ingresada' })[body.kind], ...pick(body, RECORD_FIELDS) };
         const r = check(await sb.from('records').insert(row).select().single());
-        await notifyMentions(me, [r.description, r.network].join('\n'), '', { recordId: r.id, context: 'ficha' });
         return { record: toCamel(r) };
       }
       if (seg[1] === 'records' && seg[2]) {
         const id = seg[2]; const sub = seg[3];
         if (!sub && method === 'GET') {
-          const [rec, ents, eqs, phs, hist, act, acks] = await Promise.all([
+          const [rec, ents, eqs, phs, hist, act] = await Promise.all([
             sb.from('records').select('*, entries(count), photos(count), equipment(count)').eq('id', id).maybeSingle(),
             sb.from('entries').select('*').eq('record_id', id).order('at'),
             sb.from('equipment').select('*').eq('record_id', id).order('created_at'),
             sb.from('photos').select('*').eq('record_id', id).order('at'),
             sb.from('status_history').select('*').eq('record_id', id).order('id'),
             sb.from('activity').select('*').eq('record_id', id).order('id', { ascending: false }).limit(100),
-            sb.from('entry_acks').select('entry_id,user_id,at').eq('record_id', id).order('at'),
           ]);
           const r = check(rec);
           if (!r) fail(404, 'Registro no encontrado');
           const record = summarize(r);
           record.statusHistory = check(hist).map(toCamel);
           const photos = await withUrls(check(phs));
-          const ackRows = acks.error ? [] : acks.data; // la tabla puede no existir todavía
-          const entries = check(ents).map((e) => ({ ...toCamel(e), photos: photos.filter((x) => x.entryId === e.id).map((x) => x.id), acks: ackRows.filter((a) => a.entry_id === e.id).map((a) => ({ userId: a.user_id, at: a.at })) }));
+          const entries = check(ents).map((e) => ({ ...toCamel(e), photos: photos.filter((x) => x.entryId === e.id).map((x) => x.id) }));
           return { record, entries, equipment: check(eqs).map(toCamel), photos, activity: check(act).map(toCamel) };
         }
         if (!sub && method === 'PATCH') {
           requireAdmin();
           if ('name' in body && !String(body.name).trim()) fail(400, 'El nombre es obligatorio');
-          const prev = check(await sb.from('records').select('description,network').eq('id', id).maybeSingle()) || {};
           const r = check(await sb.from('records').update(pick(body, RECORD_FIELDS)).eq('id', id).select().single());
-          await notifyMentions(me, [r.description, r.network].join('\n'), [prev.description, prev.network].join('\n'), { recordId: id, context: 'ficha' });
           return { record: toCamel(r) };
         }
         if (!sub && method === 'DELETE') {
@@ -264,12 +238,7 @@
           check(await sb.from('records').delete().eq('id', id));
           return { ok: true };
         }
-        if (sub === 'status') {
-          requireAdmin();
-          check(await sb.rpc('set_status', { p_record: id, p_status: body.status, p_note: body.note || '' }));
-          await notifyMentions(me, body.note, '', { recordId: id, context: 'estado' });
-          return { ok: true };
-        }
+        if (sub === 'status') { requireAdmin(); check(await sb.rpc('set_status', { p_record: id, p_status: body.status, p_note: body.note || '' })); return { ok: true }; }
         if (sub === 'convert') { requireAdmin(); const nid = check(await sb.rpc('convert_levantamiento', { p_id: id })); return { record: { id: nid, code: 'Proyecto' } }; }
         if (sub === 'entries') {
           const text = String(body.text || '').trim().slice(0, 5000);
@@ -277,46 +246,29 @@
           if (!text && !photos.length) fail(400, 'Escribe un comentario o adjunta una foto');
           const e = check(await sb.from('entries').insert({ record_id: id, type: body.type || 'comentario', text, user_id: me.id }).select().single());
           let failed = 0;
-          for (const item of photos) {
-            const isPdf = item && typeof item === 'object' && item.pdf;
-            const dataUrl = isPdf ? item.data : item;
-            const safe = isPdf ? String(item.name || 'documento.pdf').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w.\-]+/g, '_').replace(/\.pdf$/i, '').slice(0, 80) : '';
-            const path = isPdf ? `${id}/${e.id}/${uuid()}__${safe || 'documento'}.pdf` : `${id}/${e.id}/${uuid()}.jpg`;
-            const up = await sb.storage.from(BUCKET).upload(path, dataUrlToBlob(dataUrl), { contentType: isPdf ? 'application/pdf' : 'image/jpeg', upsert: false });
+          for (const dataUrl of photos) {
+            const path = `${id}/${e.id}/${uuid()}.jpg`;
+            const up = await sb.storage.from(BUCKET).upload(path, dataUrlToBlob(dataUrl), { contentType: 'image/jpeg', upsert: false });
             if (up.error) { failed++; continue; }
             const ins = await sb.from('photos').insert({ record_id: id, entry_id: e.id, path, user_id: me.id });
             if (ins.error) failed++;
           }
-          await notifyMentions(me, text, '', { recordId: id, entryId: e.id, context: body.type || 'comentario' });
-          if (failed) fail(400, `Se publicó el texto, pero ${failed} archivo(s) no se pudieron subir`);
+          if (failed) fail(400, `Se publicó el texto, pero ${failed} foto(s) no se pudieron subir`);
           return { entry: toCamel(e) };
         }
         if (sub === 'equipment') {
           const row = pick(body, EQUIP_FIELDS);
           if (!row.type && !row.ip && !row.model) fail(400, 'Completa al menos el tipo, modelo o IP');
           const eq = check(await sb.from('equipment').insert({ record_id: id, created_by: me.id, ...row }).select().single());
-          await notifyMentions(me, eq.notes, '', { recordId: id, context: 'equipo' });
           return { equipment: toCamel(eq) };
         }
       }
 
       // Bitácora
-      // "Visto" en un registro de la bitácora
-      if (seg[1] === 'entries' && seg[2] && seg[3] === 'ack' && method === 'POST') {
-        if (body.on === false) check(await sb.from('entry_acks').delete().eq('entry_id', seg[2]).eq('user_id', me.id));
-        else {
-          const ent = check(await sb.from('entries').select('record_id').eq('id', seg[2]).maybeSingle());
-          if (!ent) fail(404, 'Registro no encontrado');
-          check(await sb.from('entry_acks').upsert({ entry_id: seg[2], user_id: me.id, record_id: ent.record_id }, { onConflict: 'entry_id,user_id', ignoreDuplicates: true }));
-        }
-        return { ok: true };
-      }
       if (seg[1] === 'entries' && seg[2]) {
         if (method === 'PATCH') {
-          const prev = check(await sb.from('entries').select('text').eq('id', seg[2]).maybeSingle()) || {};
           const r = check(await sb.from('entries').update({ text: String(body.text || '').slice(0, 5000) }).eq('id', seg[2]).select());
           if (!r.length) fail(403, 'Solo puedes editar tus propios comentarios');
-          await notifyMentions(me, r[0].text, prev.text, { recordId: r[0].record_id, entryId: r[0].id, context: r[0].type });
           return { entry: toCamel(r[0]) };
         }
         if (method === 'DELETE') {
@@ -330,10 +282,8 @@
       // Equipos
       if (seg[1] === 'equipment' && seg[2]) {
         if (method === 'PATCH') {
-          const prev = check(await sb.from('equipment').select('notes').eq('id', seg[2]).maybeSingle()) || {};
           const r = check(await sb.from('equipment').update(pick(body, EQUIP_FIELDS)).eq('id', seg[2]).select());
           if (!r.length) fail(403, 'Solo puedes editar los equipos que tú agregaste');
-          await notifyMentions(me, r[0].notes, prev.notes, { recordId: r[0].record_id, context: 'equipo' });
           return { equipment: toCamel(r[0]) };
         }
         if (method === 'DELETE') { requireAdmin(); check(await sb.from('equipment').delete().eq('id', seg[2])); return { ok: true }; }
@@ -354,25 +304,12 @@
         const items = rows.map((e) => ({ ...toCamel(e), record: e.records || null, unread: !!(seen && e.at > seen) }));
         return { items, unread: items.filter((x) => x.unread).length, seenAt: seen };
       }
-      // Menciones que recibí
-      if (p === '/api/mentions' && method === 'GET') {
-        const { data, error } = await sb.from('mentions').select('*, records(id,code,name,kind)').eq('user_id', me.id).order('at', { ascending: false }).limit(50);
-        if (error) return { items: [], unread: 0 }; // tabla aún no creada
-        const items = data.map((m) => ({ ...toCamel(m), record: m.records || null, unread: !m.seen_at }));
-        return { items, unread: items.filter((x) => x.unread).length };
-      }
-      if (p === '/api/mentions/seen' && method === 'POST') {
-        let q = sb.from('mentions').update({ seen_at: new Date().toISOString() }).eq('user_id', me.id).is('seen_at', null);
-        if (body.id) q = q.eq('id', body.id);
-        check(await q);
-        return { ok: true };
-      }
       if (p === '/api/notifications/seen') { check(await sb.rpc('mark_notifications_seen')); return { ok: true }; }
 
       // Respaldo (descarga JSON con todos los datos, sin fotos)
       if (p === '/api/backup') {
         requireAdmin();
-        const tables = ['profiles', 'records', 'status_history', 'entries', 'equipment', 'photos', 'activity', 'mentions'];
+        const tables = ['profiles', 'records', 'status_history', 'entries', 'equipment', 'photos', 'activity'];
         const out = { generado: new Date().toISOString() };
         for (const t of tables) out[t] = check(await sb.from(t).select('*').limit(100000));
         return out;
@@ -403,7 +340,6 @@
       .on('postgres_changes', { event: '*', schema: 'public', table: 'entries', filter: `record_id=eq.${recordId}` }, fire)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'equipment', filter: `record_id=eq.${recordId}` }, fire)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'records', filter: `id=eq.${recordId}` }, fire)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'entry_acks', filter: `record_id=eq.${recordId}` }, fire)
       .subscribe();
   }
 
@@ -418,19 +354,7 @@
       .subscribe();
   }
 
-  // Tiempo real: me mencionaron
-  let mentionChannel = null;
-  function watchMentions(userId, onInsert) {
-    if (!sb) return;
-    if (mentionChannel) { sb.removeChannel(mentionChannel); mentionChannel = null; }
-    if (!userId || !onInsert) return;
-    mentionChannel = sb.channel('mentions-' + userId)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mentions', filter: `user_id=eq.${userId}` }, (payload) => onInsert(toCamel(payload.new)))
-      .subscribe();
-  }
-
   window.mtsApi = mtsApi;
-  window.mtsWatchMentions = watchMentions;
   window.mtsWatchAllEntries = watchAllEntries;
   window.mtsDownloadPhoto = downloadPhoto;
   window.mtsWatchRecord = watchRecord;
