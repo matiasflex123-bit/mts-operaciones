@@ -394,8 +394,8 @@ grant execute on function public.touch_login() to authenticated;
 
 -- ───────────── Fotos (Storage) ─────────────
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('fotos', 'fotos', false, 10485760, array['image/jpeg','image/png','image/webp'])
-on conflict (id) do update set public = false, file_size_limit = 10485760, allowed_mime_types = array['image/jpeg','image/png','image/webp'];
+values ('fotos', 'fotos', false, 20971520, array['image/jpeg','image/png','image/webp','application/pdf'])
+on conflict (id) do update set public = false, file_size_limit = 20971520, allowed_mime_types = array['image/jpeg','image/png','image/webp','application/pdf'];
 
 drop policy if exists "mts fotos ver" on storage.objects;
 drop policy if exists "mts fotos subir" on storage.objects;

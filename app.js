@@ -62,6 +62,7 @@ const ICON = {
   next: I('<path d="m9 18 6-6-6-6"/>'),
   msg: I('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>'),
   cam: I('<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/>'),
+  pdf: I('<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>'),
   img: I('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>'),
   chip: I('<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>'),
   info: I('<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>'),
@@ -100,6 +101,7 @@ const S = {
   tab: 'bitacora',
   composer: { type: 'comentario', photos: [] },
   notif: { unread: 0, items: [] },
+  ment: { unread: 0, items: [] },
 };
 function localGet(k, d) { try { return localStorage.getItem(k) || d; } catch { return d; } }
 function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* sin almacenamiento */ } }
@@ -128,6 +130,14 @@ const fYmd = (ymd) => (ymd ? new Intl.DateTimeFormat('es-CL', { day: '2-digit', 
 const userById = (id) => S.users.find((u) => u.id === id) || { name: 'Usuario eliminado', username: '?', role: 'tecnico' };
 const initials = (name) => String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 function avatarColor(id) { let h = 0; for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return AVATAR_COLORS[h % AVATAR_COLORS.length]; }
+// Texto con menciones resaltadas (@USUARIO → @Nombre)
+function richText(t) {
+  return esc(t).replace(/(^|[^\w@])@([A-Za-z0-9_.\-]+)/g, (m, a, h) => {
+    const clean = h.replace(/[.\-_]+$/, ''); const rest = h.slice(clean.length);
+    const u = S.users.find((x) => x.username.toUpperCase() === clean.toUpperCase());
+    return u ? `${a}<span class="mention${S.me && u.id === S.me.id ? ' me' : ''}" title="${esc(u.username)}">@${esc(u.name)}</span>${rest}` : m;
+  });
+}
 const avatar = (u, cls = '') => `<span class="avatar ${cls}" style="--c:${avatarColor(u.id)}">${esc(initials(u.name))}</span>`;
 const chip = (status) => { const m = STATUS_META[status] || { label: status, c: 'var(--muted)' }; return `<span class="chip" style="--c:${m.c}"><i></i>${esc(m.label)}</span>`; };
 const prettyDetail = (d) => String(d || '').replace(/\b[a-z_]+\b/g, (w) => (STATUS_META[w] ? STATUS_META[w].label : w));
@@ -180,6 +190,21 @@ function resizeImage(file, max = 1800, q = 0.82) {
     img.src = url;
   });
 }
+
+// PDF adjuntos: se guardan en el mismo almacenamiento que las fotos, con extensión .pdf
+const PDF_MAX = 20 * 1024 * 1024;
+const isDoc = (p) => /\.pdf$/i.test((p && p.path) || '');
+const docName = (p) => { const f = String(p.path || '').split('/').pop(); return f.includes('__') ? f.slice(f.indexOf('__') + 2) : 'documento.pdf'; };
+function readPdf(file) {
+  return new Promise((resolve, reject) => {
+    if (file.size > PDF_MAX) return reject(new Error(`${file.name} supera los 20 MB`));
+    const fr = new FileReader();
+    fr.onload = () => resolve({ pdf: true, name: file.name, data: fr.result });
+    fr.onerror = () => reject(new Error('No se pudo leer ' + file.name));
+    fr.readAsDataURL(file);
+  });
+}
+const docList = (docs) => docs.length ? `<div class="docs">${docs.map((p) => `<a class="doc" href="${esc(p.url)}" target="_blank" rel="noopener">${ICON.pdf}<span>${esc(docName(p))}</span><b>Abrir</b></a>`).join('')}</div>` : '';
 
 // ───────────────────────── Modales ─────────────────────────
 const modalRoot = document.getElementById('modal-root');
@@ -293,6 +318,7 @@ function renderLogin() {
       const d = await api('/api/login', { method: 'POST', body: formData(e.target) });
       S.me = d.user;
       await boot();
+      welcomeNotice();
     } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
   });
 }
@@ -318,19 +344,19 @@ function shell(active, content) {
       <div class="brand"><img src="img/logo.png" alt=""><div><b>MTS SECURITY</b><small>OPERACIONES</small></div></div>
       <nav class="nav">${items.map((it) => `<a href="#/${it.r}" class="${active === it.r ? 'on' : ''}"><span class="n">${it.n}</span>${it.icon}${it.label}${it.count ? `<span class="count">${it.count}</span>` : ''}</a>`).join('')}</nav>
       <div class="side-foot">
-        ${isAdmin() ? `<button class="btn notif-btn" data-notif>${ICON.bell} Avisos <span class="nbadge ${S.notif.unread ? '' : 'hidden'}">${S.notif.unread}</span></button>` : ''}
+        <button class="btn notif-btn" data-notif>${ICON.bell} Avisos <span class="nbadge ${unreadTotal() ? '' : 'hidden'}">${unreadTotal()}</span></button>
         <div class="me">${avatar(S.me)}<div class="grow"><b>${esc(S.me.name)}</b><small>${esc(S.me.role === 'admin' ? 'Administrador' : 'Técnico')}</small></div>
           <button class="btn ghost icon" id="logout" title="Cerrar sesión" aria-label="Cerrar sesión">${ICON.out}</button></div>
         <div class="sys"><i></i>SISTEMA EN LÍNEA</div>
       </div>
     </aside>
     <div>
-      <header class="topbar"><img src="img/logo.png" alt=""><b class="grow">MTS OPS</b>${isAdmin() ? `<button class="btn ghost icon notif-ico" data-notif aria-label="Avisos">${ICON.bell}<span class="nbadge ${S.notif.unread ? '' : 'hidden'}">${S.notif.unread}</span></button>` : ''}<a href="#/perfil" aria-label="Mi cuenta">${avatar(S.me)}</a><button class="btn ghost icon" id="logout2" aria-label="Cerrar sesión">${ICON.out}</button></header>
+      <header class="topbar"><img src="img/logo.png" alt=""><b class="grow">MTS OPS</b><button class="btn ghost icon notif-ico" data-notif aria-label="Avisos">${ICON.bell}<span class="nbadge ${unreadTotal() ? '' : 'hidden'}">${unreadTotal()}</span></button><a href="#/perfil" aria-label="Mi cuenta">${avatar(S.me)}</a><button class="btn ghost icon" id="logout2" aria-label="Cerrar sesión">${ICON.out}</button></header>
       <main class="main" id="main">${content}</main>
     </div>
     <nav class="bottomnav" style="--cols:${items.length - 1}">${items.filter((it) => it.r !== 'perfil').map((it) => `<a href="#/${it.r}" class="${active === it.r ? 'on' : ''}">${it.icon}${({ Levantamientos: 'Levant.', Mantenciones: 'Mantenc.', Reparaciones: 'Repar.' })[it.label] || it.label}</a>`).join('')}</nav>
   </div>`;
-  const lo = async () => { window.mtsWatchAllEntries(null); await api('/api/logout', { method: 'POST' }).catch(() => {}); S.me = null; S.notif = { unread: 0, items: [] }; location.hash = ''; renderLogin(); };
+  const lo = async () => { window.mtsWatchAllEntries(null); window.mtsWatchMentions(null); S.ment = { unread: 0, items: [] }; await api('/api/logout', { method: 'POST' }).catch(() => {}); S.me = null; S.notif = { unread: 0, items: [] }; location.hash = ''; renderLogin(); };
   document.getElementById('logout').onclick = lo;
   document.getElementById('logout2').onclick = lo;
   app.querySelectorAll('[data-notif]').forEach((b) => (b.onclick = openNotifications));
@@ -362,7 +388,7 @@ async function refreshUsers() { S.users = (await api('/api/users')).users; }
 
 // ───────────────────────── Panel ─────────────────────────
 async function viewDashboard() {
-  const [d] = await Promise.all([api('/api/dashboard'), refreshRecords()]);
+  const [d] = await Promise.all([api('/api/dashboard'), refreshRecords(), refreshMentions()]);
   const hour = Number(new Intl.DateTimeFormat('es-CL', { timeZone: TZ, hour: 'numeric', hour12: false }).format(new Date()));
   const greet = hour < 12 ? 'Buenos días' : hour < 20 ? 'Buenas tardes' : 'Buenas noches';
   const p = d.byStatus.proyecto; const l = d.byStatus.levantamiento;
@@ -383,11 +409,12 @@ async function viewDashboard() {
       <div class="kpi panel" style="--c:var(--violet)"><span class="label">Por facturar</span><div class="v">${p.facturacion + ((d.byStatus.reparacion || {}).facturacion || 0)}</div><span class="bar"></span></div>
       <div class="kpi panel" style="--c:var(--cyan)"><span class="label">Registros hoy</span><div class="v">${d.totals.entriesToday}</div><span class="bar"></span></div>
     </div>
+    ${mentionsPanel()}
     <div class="dash">
       <section class="panel hud">
         <div class="panel-h"><h2 class="grow">Actividad reciente</h2><span class="label">Tiempo real</span></div>
         <div class="panel-b" style="padding-top:4px;padding-bottom:4px">
-          ${d.recent.length ? `<div class="feed">${d.recent.slice(0, 18).map((a) => {
+          ${d.recent.length ? `<div class="feed dash-feed">${d.recent.slice(0, 30).map((a) => {
             const u = userById(a.userId);
             return `<div class="feed-i">${avatar(u)}<div style="min-width:0">
               <div class="t"><b>${esc(u.name)}</b> ${esc(a.action)} ${a.record ? `en <a href="#/r/${a.record.id}">${esc(a.record.code)} · ${esc(a.record.name)}</a>` : ''}</div>
@@ -409,6 +436,9 @@ async function viewDashboard() {
       </div>
     </div>`);
   app.querySelectorAll('[data-new]').forEach((b) => (b.onclick = () => recordForm(b.dataset.new)));
+  bindMentionLinks(app);
+  const ma = app.querySelector('#ment-all');
+  if (ma) ma.onclick = async () => { await api('/api/mentions/seen', { method: 'POST' }).catch(() => {}); S.ment.items.forEach((m) => (m.unread = false)); S.ment.unread = 0; updateBadges(); viewDashboard(); };
   app.querySelectorAll('.sbar[data-f]').forEach((a) => a.addEventListener('click', () => { const k = a.getAttribute('href').includes('proyectos') ? 'proyecto' : a.getAttribute('href').includes('mantenciones') ? 'mantencion' : a.getAttribute('href').includes('reparaciones') ? 'reparacion' : 'levantamiento'; S.filter[k] = a.dataset.f; }));
 }
 
@@ -683,8 +713,10 @@ function tabLog(box) {
           <div class="when">${esc(fDateTime(e.at))}${e.editedAt ? ` <span class="ed">· editado ${esc(fTime(e.editedAt))}</span>` : ''}</div></div>
         <div class="tools">${canEdit && e.text ? `<button class="btn ghost icon sm" data-edit title="Editar" aria-label="Editar">${ICON.edit}</button>` : ''}${isAdmin() ? `<button class="btn ghost icon sm" data-del title="Eliminar" aria-label="Eliminar">${ICON.trash}</button>` : ''}</div>
       </div>
-      ${e.text ? `<div class="txt">${esc(e.text)}</div>` : ''}
-      ${ph.length ? `<div class="pgrid">${ph.map((p) => `<button data-ph="${p.id}" aria-label="Ver foto"><img loading="lazy" src="${esc(p.url)}" alt=""></button>`).join('')}</div>` : ''}
+      ${e.text ? `<div class="txt">${richText(e.text)}</div>` : ''}
+      ${ph.some((p) => !isDoc(p)) ? `<div class="pgrid">${ph.filter((p) => !isDoc(p)).map((p) => `<button data-ph="${p.id}" aria-label="Ver foto"><img loading="lazy" src="${esc(p.url)}" alt=""></button>`).join('')}</div>` : ''}
+      ${docList(ph.filter(isDoc))}
+      ${ackBar(e)}
     </article>`;
   }).join('');
 
@@ -695,7 +727,7 @@ function tabLog(box) {
       <textarea class="input" id="ct" maxlength="5000" placeholder="${C.type === 'mantencion' ? 'Qué se revisó: cámaras operativas, grabación, limpieza, ajustes realizados… (al publicar se calcula la próxima fecha)' : C.type === 'avance' ? (REC.record.kind === 'reparacion' ? 'Qué se hizo: diagnóstico, pruebas, equipo reemplazado, resultado…' : 'Qué se avanzó hoy: puntos instalados, cableado, configuración…') : C.type === 'incidencia' ? 'Describe el problema encontrado…' : C.type === 'material' ? 'Material usado o faltante: cantidades, modelos…' : 'Escribe un comentario para el equipo…'}">${esc(C.draft || '')}</textarea>
       <div class="thumbs" id="thumbs"></div>
       <div class="actions">
-        <label class="btn" style="cursor:pointer">${ICON.cam} Agregar fotos<input type="file" id="cf" accept="image/*" multiple hidden></label>
+        <label class="btn" style="cursor:pointer">${ICON.cam} Fotos o PDF<input type="file" id="cf" accept="image/*,application/pdf,.pdf" multiple hidden></label>
         <span class="dim grow" style="font-size:12.5px">Se publicará como <b style="color:var(--ink)">${esc(S.me.name)}</b> con fecha y hora</span>
         <button class="btn primary" id="cs">Publicar</button>
       </div>
@@ -703,7 +735,7 @@ function tabLog(box) {
     <div class="entries">${items || `<div class="empty panel">${ICON.msg}<p>Aún no hay registros en la bitácora.<br><span class="dim">Los avances diarios, comentarios y fotos aparecerán aquí.</span></p></div>`}</div>`;
 
   const drawThumbs = () => {
-    box.querySelector('#thumbs').innerHTML = C.photos.map((p, i) => `<div class="th"><img src="${p}" alt=""><button data-rm="${i}" aria-label="Quitar">×</button></div>`).join('');
+    box.querySelector('#thumbs').innerHTML = C.photos.map((p, i) => `<div class="th ${p.pdf ? 'pdf' : ''}">${p.pdf ? `${ICON.pdf}<small>${esc(p.name)}</small>` : `<img src="${p}" alt="">`}<button data-rm="${i}" aria-label="Quitar">×</button></div>`).join('');
     box.querySelectorAll('[data-rm]').forEach((b) => (b.onclick = () => { C.photos.splice(Number(b.dataset.rm), 1); drawThumbs(); }));
   };
   drawThumbs();
@@ -711,13 +743,15 @@ function tabLog(box) {
   box.querySelectorAll('[data-type]').forEach((b) => (b.onclick = () => { C.type = b.dataset.type; tabLog(box); }));
   box.querySelector('#cf').addEventListener('change', async (e) => {
     const files = [...e.target.files].slice(0, 12 - C.photos.length);
-    for (const f of files) { try { C.photos.push(await resizeImage(f)); } catch (ex) { toastErr(ex); } }
+    for (const f of files) {
+      try { C.photos.push(f.type === 'application/pdf' || /\.pdf$/i.test(f.name) ? await readPdf(f) : await resizeImage(f)); } catch (ex) { toastErr(ex); }
+    }
     e.target.value = ''; drawThumbs();
   });
   box.querySelector('#cs').onclick = async (ev) => {
     const text = box.querySelector('#ct').value.trim();
-    if (!text && !C.photos.length) return toast('Escribe algo o agrega una foto', 'var(--amber)');
-    ev.target.disabled = true; ev.target.textContent = C.photos.length ? 'Subiendo fotos…' : 'Publicando…';
+    if (!text && !C.photos.length) return toast('Escribe algo o agrega una foto o PDF', 'var(--amber)');
+    ev.target.disabled = true; ev.target.textContent = C.photos.length ? 'Subiendo archivos…' : 'Publicando…';
     try {
       await api(`/api/records/${REC.record.id}/entries`, { method: 'POST', body: { type: C.type, text, photos: C.photos } });
       C.photos = []; C.draft = '';
@@ -726,8 +760,19 @@ function tabLog(box) {
   };
   box.querySelectorAll('[data-ph]').forEach((b) => (b.onclick = () => {
     const entryEl = b.closest('.entry'); const e = REC.entries.find((x) => x.id === entryEl.dataset.id);
-    const ph = e.photos.map((id) => byId[id]).filter(Boolean);
+    const ph = e.photos.map((id) => byId[id]).filter((p) => p && !isDoc(p));
     lightbox(ph, ph.findIndex((p) => p.id === b.dataset.ph));
+  }));
+  box.querySelectorAll('[data-ack]').forEach((b) => (b.onclick = async () => {
+    const e = REC.entries.find((x) => x.id === b.closest('.entry').dataset.id);
+    const on = !(e.acks || []).some((a) => a.userId === S.me.id);
+    e.acks = on ? [...(e.acks || []), { userId: S.me.id, at: new Date().toISOString() }] : (e.acks || []).filter((a) => a.userId !== S.me.id);
+    tabLog(box);
+    try { await api(`/api/entries/${e.id}/ack`, { method: 'POST', body: { on } }); } catch (ex) { toastErr(ex); reloadRecord(); }
+  }));
+  box.querySelectorAll('[data-acklist]').forEach((b) => (b.onclick = () => {
+    const e = REC.entries.find((x) => x.id === b.closest('.entry').dataset.id);
+    openModal({ title: 'Visto por', body: `<div class="nlist" style="margin:0 -18px -18px">${(e.acks || []).map((a) => { const u = userById(a.userId); return `<div class="nitem">${avatar(u)}<div style="flex:1"><div class="t"><b>${esc(u.name)}</b></div><div class="d">${esc(fDateTime(a.at))}</div></div></div>`; }).join('')}</div>` });
   }));
   box.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => {
     const e = REC.entries.find((x) => x.id === b.closest('.entry').dataset.id);
@@ -774,10 +819,10 @@ function tabEquip(box) {
     const actions = (e) => `${canEdit(e) ? `<button class="btn ghost icon sm" data-e="${e.id}" title="Editar" aria-label="Editar">${ICON.edit}</button>` : ''}${isAdmin() ? `<button class="btn ghost icon sm" data-d="${e.id}" title="Eliminar" aria-label="Eliminar">${ICON.trash}</button>` : ''}`;
     el.innerHTML = `
       <div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>Equipo</th><th>Marca / modelo</th><th>IP</th><th>Ubicación</th><th>Usuario / clave</th><th>MAC / serie</th><th>Registró</th><th></th></tr></thead><tbody>
-      ${shown.map((e) => `<tr data-id="${e.id}"><td><b>${esc(e.type || '—')}</b>${e.notes ? `<div class="dim" style="font-size:12px;max-width:220px;white-space:normal">${esc(e.notes)}</div>` : ''}</td><td>${esc([e.brand, e.model].filter(Boolean).join(' ') || '—')}</td><td>${ipCell(e)}</td><td>${esc(e.location || '—')}</td><td>${pwCell(e)}</td><td class="mono" style="font-size:12px">${esc(e.mac || '')}${e.serial ? `<div class="dim">${esc(e.serial)}</div>` : ''}</td><td class="dim" style="font-size:12px;white-space:nowrap">${esc(userById(e.createdBy).name.split(' ')[0])}<div class="mono">${esc(fDate(e.createdAt))}</div></td><td style="white-space:nowrap">${actions(e)}</td></tr>`).join('')}
+      ${shown.map((e) => `<tr data-id="${e.id}"><td><b>${esc(e.type || '—')}</b>${e.notes ? `<div class="dim" style="font-size:12px;max-width:220px;white-space:normal">${richText(e.notes)}</div>` : ''}</td><td>${esc([e.brand, e.model].filter(Boolean).join(' ') || '—')}</td><td>${ipCell(e)}</td><td>${esc(e.location || '—')}</td><td>${pwCell(e)}</td><td class="mono" style="font-size:12px">${esc(e.mac || '')}${e.serial ? `<div class="dim">${esc(e.serial)}</div>` : ''}</td><td class="dim" style="font-size:12px;white-space:nowrap">${esc(userById(e.createdBy).name.split(' ')[0])}<div class="mono">${esc(fDate(e.createdAt))}</div></td><td style="white-space:nowrap">${actions(e)}</td></tr>`).join('')}
       </tbody></table>${!shown.length ? '<p class="dim" style="text-align:center;padding:20px">Sin resultados</p>' : ''}</div>
       <div class="eq-cards">${shown.map((e) => `<div class="eq-card panel" data-id="${e.id}"><div class="row"><b class="grow">${esc(e.type || 'Equipo')}</b>${actions(e)}</div>
-        <dl><dt>IP</dt><dd>${ipCell(e)}</dd>${e.brand || e.model ? `<dt>Modelo</dt><dd>${esc([e.brand, e.model].filter(Boolean).join(' '))}</dd>` : ''}${e.location ? `<dt>Ubicación</dt><dd>${esc(e.location)}</dd>` : ''}${e.username || e.password ? `<dt>Acceso</dt><dd>${pwCell(e)}</dd>` : ''}${e.mac ? `<dt>MAC</dt><dd class="mono">${esc(e.mac)}</dd>` : ''}${e.serial ? `<dt>Serie</dt><dd class="mono">${esc(e.serial)}</dd>` : ''}${e.notes ? `<dt>Notas</dt><dd>${esc(e.notes)}</dd>` : ''}<dt>Registró</dt><dd class="dim">${esc(userById(e.createdBy).name)} · ${esc(fDate(e.createdAt))}</dd></dl></div>`).join('')}</div>`;
+        <dl><dt>IP</dt><dd>${ipCell(e)}</dd>${e.brand || e.model ? `<dt>Modelo</dt><dd>${esc([e.brand, e.model].filter(Boolean).join(' '))}</dd>` : ''}${e.location ? `<dt>Ubicación</dt><dd>${esc(e.location)}</dd>` : ''}${e.username || e.password ? `<dt>Acceso</dt><dd>${pwCell(e)}</dd>` : ''}${e.mac ? `<dt>MAC</dt><dd class="mono">${esc(e.mac)}</dd>` : ''}${e.serial ? `<dt>Serie</dt><dd class="mono">${esc(e.serial)}</dd>` : ''}${e.notes ? `<dt>Notas</dt><dd>${richText(e.notes)}</dd>` : ''}<dt>Registró</dt><dd class="dim">${esc(userById(e.createdBy).name)} · ${esc(fDate(e.createdAt))}</dd></dl></div>`).join('')}</div>`;
     el.querySelectorAll('[data-copy]').forEach((b) => (b.onclick = () => copyText(b.dataset.copy)));
     el.querySelectorAll('[data-reveal]').forEach((b) => (b.onclick = () => { const s = b.previousElementSibling; s.textContent = s.textContent === '••••••' ? s.dataset.pw : '••••••'; }));
     el.querySelectorAll('[data-e]').forEach((b) => (b.onclick = () => equipForm(eqs.find((x) => x.id === b.dataset.e))));
@@ -827,15 +872,19 @@ function equipForm(eq) {
 
 // ── Fotos ──
 function tabPhotos(box) {
-  const ph = [...REC.photos].reverse();
-  box.innerHTML = ph.length ? `<div class="gallery">${ph.map((p, i) => `<figure class="panel"><button data-i="${i}" aria-label="Ver foto"><img loading="lazy" src="${esc(p.url)}" alt=""></button>
+  const all = [...REC.photos].reverse();
+  const ph = all.filter((p) => !isDoc(p));
+  const docs = all.filter(isDoc);
+  const docsHtml = docs.length ? `<h3 class="label" style="margin:0 0 10px">Documentos PDF</h3><div class="docs" style="margin-bottom:22px">${docs.map((p) => `<div class="doc">${ICON.pdf}<a href="${esc(p.url)}" target="_blank" rel="noopener"><span>${esc(docName(p))}</span></a><span class="mono dim" style="font-size:11px">${esc(userById(p.userId).name.split(' ')[0])} · ${esc(fDate(p.at))}</span>${isAdmin() ? `<button class="btn ghost icon sm" data-del="${p.id}" style="width:26px;height:26px" aria-label="Eliminar PDF">${ICON.trash}</button>` : ''}</div>`).join('')}</div>` : '';
+  box.innerHTML = !all.length ? '' : docsHtml + (ph.length ? `<h3 class="label" style="margin:0 0 10px">Fotos</h3>` : '');
+  box.innerHTML += ph.length ? `<div class="gallery">${ph.map((p, i) => `<figure class="panel"><button data-i="${i}" aria-label="Ver foto"><img loading="lazy" src="${esc(p.url)}" alt=""></button>
     <figcaption>${esc(userById(p.userId).name.split(' ')[0])}<span class="mono">${esc(fDate(p.at))} ${esc(fTime(p.at))}</span>${isAdmin() ? `<button class="btn ghost icon sm" data-del="${p.id}" style="width:26px;height:26px" aria-label="Eliminar foto">${ICON.trash}</button>` : ''}</figcaption></figure>`).join('')}</div>`
-    : `<div class="empty panel">${ICON.img}<p>Aún no hay fotos.<br><span class="dim">Las fotos se suben desde la Bitácora, junto a un comentario o avance.</span></p><button class="btn" id="go">${ICON.cam} Ir a la bitácora</button></div>`;
+    : all.length ? '' : `<div class="empty panel">${ICON.img}<p>Aún no hay fotos ni documentos.<br><span class="dim">Las fotos y PDF se suben desde la Bitácora, junto a un comentario o avance.</span></p><button class="btn" id="go">${ICON.cam} Ir a la bitácora</button></div>`;
   box.querySelectorAll('[data-i]').forEach((b) => (b.onclick = () => lightbox(ph, Number(b.dataset.i))));
   const go = box.querySelector('#go'); if (go) go.onclick = () => app.querySelector('[data-tab="bitacora"]').click();
   box.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async () => {
-    if (await confirmModal({ title: 'Eliminar foto', text: 'La foto se eliminará definitivamente.', okLabel: 'Eliminar', danger: true })) {
-      try { await api(`/api/photos/${b.dataset.del}`, { method: 'DELETE' }); toast('Foto eliminada'); reloadRecord(); } catch (e) { toastErr(e); }
+    if (await confirmModal({ title: 'Eliminar archivo', text: 'El archivo se eliminará definitivamente.', okLabel: 'Eliminar', danger: true })) {
+      try { await api(`/api/photos/${b.dataset.del}`, { method: 'DELETE' }); toast('Archivo eliminado'); reloadRecord(); } catch (e) { toastErr(e); }
     }
   }));
 }
@@ -855,8 +904,8 @@ function tabInfo(box) {
       ${row('Encargado MTS', r.responsible)}
       ${row('Prioridad', r.priority ? r.priority[0].toUpperCase() + r.priority.slice(1) : '')}
       ${r.kind === 'mantencion' ? `${row('Frecuencia', FREQ[r.frequency] || '')}${row('Próxima mantención', fYmd(r.nextDate))}${row('Última realizada', fYmd(r.lastDate))}${row('Inicio contrato', fYmd(r.startDate))}${row('Término contrato', fYmd(r.endDate))}` : `${row(({ proyecto: 'Inicio', reparacion: 'Fecha de reporte' })[r.kind] || 'Fecha visita', fYmd(r.startDate))}${row(({ proyecto: 'Entrega estimada', reparacion: 'Fecha comprometida' })[r.kind] || 'Fecha respuesta', fYmd(r.endDate))}`}
-      ${row('Descripción', r.description)}
-      ${row('Datos de red', r.network ? `<span class="mono" style="font-size:13px">${esc(r.network)}</span>` : '', true)}
+      ${row('Descripción', r.description ? richText(r.description) : '', true)}
+      ${row('Datos de red', r.network ? `<span class="mono" style="font-size:13px">${richText(r.network)}</span>` : '', true)}
       ${row('Creado', `${esc(userById(r.createdBy).name)} · ${esc(fDateTime(r.createdAt))}`, true)}
     </dl></div></section>`;
   const b = box.querySelector('#ed2'); if (b) b.onclick = () => recordForm(r.kind, r);
@@ -868,7 +917,7 @@ function tabHistory(box) {
   box.innerHTML = `<div class="dash" style="grid-template-columns:1fr 1fr">
     <section class="panel"><div class="panel-h"><h2>Cambios de estado</h2></div><div class="panel-b"><div class="tl">
       ${[...r.statusHistory].reverse().map((h) => `<div class="tl-i" style="--c:${STATUS_META[h.status].c}"><div>${chip(h.status)}</div>
-        <div style="margin-top:6px;font-size:14px"><b>${esc(userById(h.by).name)}</b></div>${h.note ? `<div class="muted" style="font-size:13.5px">${esc(h.note)}</div>` : ''}<div class="d">${esc(fDateTime(h.at))}</div></div>`).join('')}
+        <div style="margin-top:6px;font-size:14px"><b>${esc(userById(h.by).name)}</b></div>${h.note ? `<div class="muted" style="font-size:13.5px">${richText(h.note)}</div>` : ''}<div class="d">${esc(fDateTime(h.at))}</div></div>`).join('')}
     </div></div></section>
     <section class="panel"><div class="panel-h"><h2>Actividad</h2></div><div class="panel-b" style="padding-top:4px"><div class="feed">
       ${REC.activity.map((a) => { const u = userById(a.userId); return `<div class="feed-i">${avatar(u)}<div style="min-width:0"><div class="t"><b>${esc(u.name)}</b> ${esc(a.action)}</div>${a.detail ? `<div class="x">${esc(prettyDetail(a.detail))}</div>` : ''}<div class="d">${esc(fDateTime(a.at))}</div></div></div>`; }).join('') || '<p class="dim">Sin actividad</p>'}
@@ -1068,9 +1117,46 @@ function exportEquipment() {
 }
 
 // ───────────────────────── Avisos (notificaciones) ─────────────────────────
+const unreadTotal = () => (isAdmin() ? S.notif.unread : 0) + S.ment.unread;
 function updateBadges() {
-  document.querySelectorAll('.nbadge').forEach((b) => { b.textContent = S.notif.unread > 99 ? '99+' : S.notif.unread; b.classList.toggle('hidden', !S.notif.unread); });
-  document.title = (S.notif.unread ? `(${S.notif.unread}) ` : '') + 'MTS Operaciones';
+  const n = unreadTotal();
+  document.querySelectorAll('.nbadge').forEach((b) => { b.textContent = n > 99 ? '99+' : n; b.classList.toggle('hidden', !n); });
+  document.title = (n ? `(${n}) ` : '') + 'MTS Operaciones';
+}
+// ── Menciones ──
+const MENT_CTX = { comentario: 'un comentario', avance: 'un avance diario', incidencia: 'una incidencia', material: 'un registro de material', mantencion: 'una mantención', estado: 'un cambio de estado', ficha: 'la ficha', equipo: 'las notas de un equipo' };
+async function refreshMentions() {
+  try { const d = await api('/api/mentions'); S.ment.items = d.items; S.ment.unread = d.unread; updateBadges(); } catch { /* sin menciones */ }
+}
+function mentionItem(m) {
+  const u = userById(m.byUser);
+  return `<a class="nitem ${m.unread ? 'unread' : ''}" href="#/r/${m.recordId}" data-ment="${m.id}">${avatar(u)}<div style="min-width:0;flex:1">
+    <div class="t"><b>${esc(u.name)}</b> te mencionó en ${esc(MENT_CTX[m.context] || 'un registro')}</div>
+    <div class="x">${m.record ? `${esc(m.record.code)} · ${esc(m.record.name)}` : ''}</div>
+    ${m.snippet ? `<div class="nt">${richText(m.snippet.slice(0, 200))}${m.snippet.length > 200 ? '…' : ''}</div>` : ''}
+    <div class="d">${esc(fDateTime(m.at))}</div></div></a>`;
+}
+function mentionsPanel() {
+  const items = S.ment.items.slice(0, 8);
+  if (!items.length) return '';
+  return `<section class="panel hud ment-panel" style="margin-bottom:18px">
+    <div class="panel-h"><h2 class="grow">${ICON.bell} Te mencionaron${S.ment.unread ? ` <span class="nbadge" style="position:static;margin-left:6px">${S.ment.unread}</span>` : ''}</h2>
+      ${S.ment.unread ? '<button class="btn sm ghost" id="ment-all">Marcar todas como leídas</button>' : ''}</div>
+    <div class="nlist" style="margin:0;max-height:none">${items.map(mentionItem).join('')}</div></section>`;
+}
+function bindMentionLinks(root, after) {
+  root.querySelectorAll('[data-ment]').forEach((a) => a.addEventListener('click', () => {
+    const m = S.ment.items.find((x) => x.id === a.dataset.ment);
+    if (m && m.unread) { m.unread = false; S.ment.unread = Math.max(0, S.ment.unread - 1); updateBadges(); api('/api/mentions/seen', { method: 'POST', body: { id: m.id } }).catch(() => {}); }
+    if (after) after();
+  }));
+}
+function onNewMention(m) {
+  const u = userById(m.byUser);
+  const rec = S.records.find((x) => x.id === m.recordId);
+  toast(`${u.name} te mencionó${rec ? ' en ' + rec.code : ''}`, 'var(--accent)');
+  browserNotify(`${u.name} te mencionó${rec ? ' · ' + rec.name : ''}`, String(m.snippet || '').slice(0, 180), m.recordId, 'm-' + m.id);
+  refreshMentions().then(() => { if ((location.hash || '#/panel').startsWith('#/panel')) viewDashboard().catch(() => {}); });
 }
 async function refreshNotifications() {
   try { const d = await api('/api/notifications'); S.notif.items = d.items; S.notif.unread = d.unread; updateBadges(); } catch { /* sin avisos */ }
@@ -1096,12 +1182,14 @@ function onNewEntry(e) {
   refreshNotifications();
 }
 function startNotifications() {
+  refreshMentions();
+  window.mtsWatchMentions(S.me.id, onNewMention);
   if (!isAdmin()) { window.mtsWatchAllEntries(null); return; }
   refreshNotifications();
   window.mtsWatchAllEntries(onNewEntry);
 }
 async function openNotifications() {
-  await refreshNotifications();
+  await Promise.all([isAdmin() ? refreshNotifications() : null, refreshMentions()]);
   const items = S.notif.items;
   const perm = notifSupported() ? Notification.permission : 'unsupported';
   const permBox = perm === 'granted' ? `<div class="note">${ICON.check.replace('<svg', '<svg style="width:15px;height:15px;vertical-align:-2px;margin-right:6px"')}<b>Avisos del navegador activados.</b> Te llegará un aviso aunque tengas la plataforma minimizada o en otra pestaña.</div>`
@@ -1113,12 +1201,15 @@ async function openNotifications() {
     return `<a class="nitem ${e.unread ? 'unread' : ''}" href="#/r/${e.recordId}" data-close-nav>${avatar(u)}<div style="min-width:0;flex:1">
       <div class="t"><b>${esc(u.name)}</b> <span class="tag" style="--c:${tm.c}">${esc(tm.label)}</span></div>
       <div class="x">${e.record ? `${esc(e.record.code)} · ${esc(e.record.name)}` : ''}</div>
-      ${e.text ? `<div class="nt">${esc(e.text.slice(0, 160))}${e.text.length > 160 ? '…' : ''}</div>` : ''}
+      ${e.text ? `<div class="nt">${richText(e.text.slice(0, 160))}${e.text.length > 160 ? '…' : ''}</div>` : ''}
       <div class="d">${esc(fDateTime(e.at))}</div></div></a>`;
   }).join('') : `<div class="empty" style="padding:30px 10px">${ICON.bell}<p>Sin avisos todavía.<br><span class="dim">Aquí aparecerá todo lo que registre tu equipo en los proyectos.</span></p></div>`;
+  const ments = S.ment.items.length ? `<div class="label" style="margin:14px 0 6px">Menciones</div><div class="nlist" style="margin:0 -18px 14px;max-height:34vh">${S.ment.items.slice(0, 20).map(mentionItem).join('')}</div>` : '';
+  const total = unreadTotal();
   openModal({
-    title: `Avisos${S.notif.unread ? ` · ${S.notif.unread} nuevo${S.notif.unread === 1 ? '' : 's'}` : ''}`,
-    body: `${permBox}<div class="nlist">${list}</div>`,
+    title: `Avisos${total ? ` · ${total} nuevo${total === 1 ? '' : 's'}` : ''}`,
+    body: isAdmin() ? `${permBox}${ments}${ments ? '<div class="label" style="margin:0 0 6px">Actividad del equipo</div>' : ''}<div class="nlist">${list}</div>`
+      : `${permBox}${ments || `<div class="empty" style="padding:30px 10px">${ICON.bell}<p>Sin menciones todavía.<br><span class="dim">Cuando alguien escriba @${esc(S.me.username)} en un comentario, aparecerá aquí.</span></p></div>`}`,
     onMount: (el, close) => {
       const pb = el.querySelector('#nperm');
       if (pb) pb.onclick = async () => {
@@ -1127,10 +1218,94 @@ async function openNotifications() {
         close(); openNotifications();
       };
       el.querySelectorAll('[data-close-nav]').forEach((a) => a.addEventListener('click', () => close()));
+      bindMentionLinks(el, close);
     },
   });
-  if (S.notif.unread) { api('/api/notifications/seen', { method: 'POST' }).then(() => { S.notif.unread = 0; updateBadges(); }).catch(() => {}); }
+  if (isAdmin() && S.notif.unread) { api('/api/notifications/seen', { method: 'POST' }).then(() => { S.notif.unread = 0; updateBadges(); }).catch(() => {}); }
 }
+
+// ───────────────────────── "Visto" en la bitácora ─────────────────────────
+function ackBar(e) {
+  const acks = e.acks || [];
+  const mine = acks.some((a) => a.userId === S.me.id);
+  const own = e.userId === S.me.id;
+  const names = acks.map((a) => userById(a.userId).name.split(' ')[0]);
+  const label = !acks.length ? '' : names.length <= 3 ? names.join(', ') : `${names.slice(0, 2).join(', ')} y ${names.length - 2} más`;
+  return `<div class="ackbar">
+    ${own ? '' : `<button class="ack-btn ${mine ? 'on' : ''}" data-ack title="${mine ? 'Quitar visto' : 'Marcar como visto'}">${ICON.check}${mine ? 'Visto' : 'Marcar visto'}</button>`}
+    ${acks.length ? `<button class="ack-who" data-acklist title="Ver quién lo vio"><span class="ack-av">${acks.slice(0, 4).map((a) => avatar(userById(a.userId))).join('')}</span>Visto por ${esc(label)}</button>` : own ? '<span class="ack-none">Nadie lo ha marcado como visto aún</span>' : ''}
+  </div>`;
+}
+
+// ───────────────────────── Aviso al iniciar sesión ─────────────────────────
+async function welcomeNotice() {
+  await refreshMentions();
+  const n = S.ment.unread;
+  openModal({
+    title: 'Aviso',
+    body: `<div style="text-align:center;padding:6px 4px">
+      <div style="width:56px;height:56px;margin:0 auto 14px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)">${ICON.bell.replace('<svg', '<svg style="width:28px;height:28px"')}</div>
+      <p style="margin:0 0 10px;font-size:16px;line-height:1.5">Por favor revisar la <b>campanita de notificaciones</b> si es que fuiste mencionado en algún proyecto.</p>
+      <p class="muted" style="margin:0">Atentamente, su jefecito Matías :)</p>
+      ${n ? `<div class="note" style="margin-top:16px;text-align:left">Tienes <b>${n} mención${n === 1 ? '' : 'es'} sin leer</b>.</div>` : ''}
+    </div>`,
+    foot: `<button class="btn" data-close>Entendido</button><button class="btn primary" id="wn-open">${ICON.bell} Ver notificaciones</button>`,
+    onMount: (el, close) => { el.querySelector('#wn-open').onclick = () => { close(); openNotifications(); }; },
+  });
+}
+
+// ───────────────────────── Autocompletar @menciones ─────────────────────────
+// Funciona en cualquier cuadro de texto de la plataforma: al escribir @ aparece la lista de usuarios.
+const mentionPop = { el: null, field: null, start: 0, list: [], i: 0 };
+const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function mentionQuery(f) {
+  const pos = f.selectionStart; if (pos == null) return null;
+  const m = /(^|[^\w@])@([A-Za-z0-9_.\-\u00C0-\u017F]*)$/.exec(f.value.slice(0, pos));
+  return m ? { start: pos - m[2].length - 1, q: m[2] } : null;
+}
+function closeMentionPop() { if (mentionPop.el) mentionPop.el.remove(); mentionPop.el = null; mentionPop.field = null; }
+function drawMentionPop() {
+  const { list, i, field } = mentionPop;
+  if (!mentionPop.el) { mentionPop.el = document.createElement('div'); mentionPop.el.className = 'mention-pop'; document.body.appendChild(mentionPop.el); }
+  const el = mentionPop.el;
+  el.innerHTML = `<div class="mp-h">Mencionar a…</div>` + list.map((u, k) => `<button type="button" class="mp-i ${k === i ? 'on' : ''}" data-k="${k}">${avatar(u)}<span><b>${esc(u.name)}</b><small>@${esc(u.username)} · ${u.role === 'admin' ? 'Administrador' : 'Técnico'}</small></span></button>`).join('');
+  const r = field.getBoundingClientRect();
+  const h = Math.min(260, 34 + list.length * 50);
+  const below = window.innerHeight - r.bottom > h + 8 || r.top < h + 8;
+  el.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 300)) + 'px';
+  el.style.top = (below ? r.bottom + 4 : r.top - h - 4) + 'px';
+  el.querySelectorAll('[data-k]').forEach((b) => b.addEventListener('mousedown', (ev) => { ev.preventDefault(); pickMention(Number(b.dataset.k)); }));
+}
+function pickMention(k) {
+  const f = mentionPop.field; const u = mentionPop.list[k]; if (!f || !u) return;
+  const end = f.selectionStart;
+  const ins = '@' + u.username + ' ';
+  f.value = f.value.slice(0, mentionPop.start) + ins + f.value.slice(end);
+  const p = mentionPop.start + ins.length; f.setSelectionRange(p, p);
+  closeMentionPop();
+  f.dispatchEvent(new Event('input', { bubbles: true }));
+  f.focus();
+}
+document.addEventListener('input', (e) => {
+  const f = e.target;
+  if (!S.me || f.tagName !== 'TEXTAREA') return;
+  const q = mentionQuery(f);
+  if (!q) { if (mentionPop.field === f) closeMentionPop(); return; }
+  const n = norm(q.q);
+  const list = S.users.filter((u) => u.active && u.id !== S.me.id && (!n || norm(u.username).includes(n) || norm(u.name).split(/\s+/).some((w) => w.startsWith(n)) || norm(u.name).includes(n))).slice(0, 6);
+  if (!list.length) { closeMentionPop(); return; }
+  Object.assign(mentionPop, { field: f, start: q.start, list, i: 0 });
+  drawMentionPop();
+});
+document.addEventListener('keydown', (e) => {
+  if (!mentionPop.el || e.target !== mentionPop.field) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = mentionPop.list.length; mentionPop.i = (mentionPop.i + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; drawMentionPop(); }
+  else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); pickMention(mentionPop.i); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMentionPop(); }
+}, true);
+document.addEventListener('focusout', (e) => { if (e.target === mentionPop.field) setTimeout(closeMentionPop, 120); });
+window.addEventListener('resize', closeMentionPop);
+document.addEventListener('scroll', (e) => { if (mentionPop.el && !mentionPop.el.contains(e.target)) closeMentionPop(); }, true);
 
 // ───────────────────────── Inicio ─────────────────────────
 async function boot() {
