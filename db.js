@@ -121,6 +121,19 @@
     } catch { return 0; }
   }
   const requireAdmin = () => { if (!meCache || meCache.role !== 'admin') fail(403, 'Solo un administrador puede realizar esta acción'); };
+  // Cotizaciones: solo el usuario principal MMORA (la base de datos lo vuelve a validar)
+  const QUOTE_BUCKET = 'cotizaciones';
+  const isOwner = () => !!(meCache && meCache.owner === true && meCache.username === 'MMORA' && meCache.role === 'admin');
+  const requireOwner = () => { if (!isOwner()) fail(403, 'Solo el usuario principal puede ver las cotizaciones'); };
+  async function quotesWithUrls(rows) {
+    const paths = rows.map((q) => q.path);
+    const urls = {};
+    if (paths.length) {
+      const { data } = await sb.storage.from(QUOTE_BUCKET).createSignedUrls(paths, 600); // 10 minutos
+      (data || []).forEach((d) => { if (d.signedUrl) urls[d.path] = d.signedUrl; });
+    }
+    return rows.map((q) => ({ ...toCamel(q), amount: q.amount === null ? null : Number(q.amount), url: urls[q.path] || '' }));
+  }
 
   function summarize(r) {
     const o = toCamel(r);
@@ -248,7 +261,13 @@
           const photos = await withUrls(check(phs));
           const ackRows = acks.error ? [] : acks.data; // la tabla puede no existir todavía
           const entries = check(ents).map((e) => ({ ...toCamel(e), photos: photos.filter((x) => x.entryId === e.id).map((x) => x.id), acks: ackRows.filter((a) => a.entry_id === e.id).map((a) => ({ userId: a.user_id, at: a.at })) }));
-          return { record, entries, equipment: check(eqs).map(toCamel), photos, activity: check(act).map(toCamel) };
+          const out = { record, entries, equipment: check(eqs).map(toCamel), photos, activity: check(act).map(toCamel) };
+          if (isOwner() && r.kind === 'levantamiento') {
+            const qs = await sb.from('quotes').select('*').eq('record_id', id).order('at', { ascending: false });
+            out.quotes = qs.error ? [] : await quotesWithUrls(qs.data); // la tabla puede no existir todavía
+            out.quotesReady = !qs.error;
+          }
+          return out;
         }
         if (!sub && method === 'PATCH') {
           requireAdmin();
@@ -262,6 +281,10 @@
           requireAdmin();
           const phs = check(await sb.from('photos').select('path').eq('record_id', id));
           for (let i = 0; i < phs.length; i += 100) await sb.storage.from(BUCKET).remove(phs.slice(i, i + 100).map((x) => x.path));
+          if (isOwner()) {
+            const qs = await sb.from('quotes').select('path').eq('record_id', id);
+            if (!qs.error && qs.data.length) await sb.storage.from(QUOTE_BUCKET).remove(qs.data.map((x) => x.path));
+          }
           check(await sb.from('records').delete().eq('id', id));
           return { ok: true };
         }
@@ -291,6 +314,26 @@
           await notifyMentions(me, text, '', { recordId: id, entryId: e.id, context: body.type || 'comentario' });
           if (failed) fail(400, `Se publicó el texto, pero ${failed} archivo(s) no se pudieron subir`);
           return { entry: toCamel(e) };
+        }
+        if (sub === 'quotes' && method === 'POST') {
+          requireOwner();
+          const file = body.file;
+          if (!(file instanceof Blob)) fail(400, 'Selecciona el archivo de la cotización');
+          if (file.size > 20 * 1024 * 1024) fail(400, 'El archivo es demasiado grande (máximo 20 MB)');
+          const orig = String(file.name || 'cotizacion');
+          const ext = (/\.([a-z0-9]{2,5})$/i.exec(orig) || [, 'pdf'])[1].toLowerCase();
+          const safe = orig.replace(/\.[^.]+$/, '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w.\-]+/g, '_').slice(0, 80) || 'cotizacion';
+          const path = `${id}/${uuid()}__${safe}.${ext}`;
+          const up = await sb.storage.from(QUOTE_BUCKET).upload(path, file, { contentType: file.type || undefined, upsert: false });
+          if (up.error) fail(400, friendly(up.error));
+          const amount = String(body.amount ?? '').replace(/[^\d]/g, '');
+          const ins = await sb.from('quotes').insert({
+            record_id: id, path, file_name: orig.slice(0, 120), user_id: me.id,
+            number: String(body.number || '').trim().slice(0, 60), amount: amount ? Number(amount) : null,
+            notes: String(body.notes || '').trim().slice(0, 1000),
+          }).select().single();
+          if (ins.error) { await sb.storage.from(QUOTE_BUCKET).remove([path]); fail(400, friendly(ins.error)); }
+          return { quote: toCamel(ins.data) };
         }
         if (sub === 'equipment') {
           const row = pick(body, EQUIP_FIELDS);
@@ -346,6 +389,25 @@
         if (ph) await sb.storage.from(BUCKET).remove([ph.path]);
         check(await sb.from('photos').delete().eq('id', seg[2]));
         return { ok: true };
+      }
+      // Cotizaciones (solo usuario principal)
+      if (seg[1] === 'quotes' && seg[2]) {
+        requireOwner();
+        if (method === 'PATCH') {
+          const amount = String(body.amount ?? '').replace(/[^\d]/g, '');
+          const r = check(await sb.from('quotes').update({
+            number: String(body.number || '').trim().slice(0, 60), amount: amount ? Number(amount) : null,
+            notes: String(body.notes || '').trim().slice(0, 1000),
+          }).eq('id', seg[2]).select());
+          if (!r.length) fail(404, 'Cotización no encontrada');
+          return { quote: toCamel(r[0]) };
+        }
+        if (method === 'DELETE') {
+          const q = check(await sb.from('quotes').select('path').eq('id', seg[2]).maybeSingle());
+          if (q) await sb.storage.from(QUOTE_BUCKET).remove([q.path]);
+          check(await sb.from('quotes').delete().eq('id', seg[2]));
+          return { ok: true };
+        }
       }
       // Notificaciones (registros de otros usuarios)
       if (p === '/api/notifications' && method === 'GET') {

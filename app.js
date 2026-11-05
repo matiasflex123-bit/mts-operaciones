@@ -88,6 +88,8 @@ const ICON = {
   wrench: I('<path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 1.3-1.3a4 4 0 0 0-5-5L3 9l3-3 3 3 1.3-1.3a4 4 0 0 0 4.4-1.4z"/>'),
   bell: I('<path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/>'),
   xls: I('<rect x="4" y="3" width="16" height="18" rx="2"/><path d="m9 8 6 8M15 8l-6 8"/>'),
+  lock: I('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
+  money: I('<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9.5v5M18 9.5v5"/>'),
 };
 
 // ───────────────────────── Estado ─────────────────────────
@@ -108,6 +110,8 @@ function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* sin alm
 
 const app = document.getElementById('app');
 const isAdmin = () => S.me && S.me.role === 'admin';
+// Cotizaciones: solo el usuario principal MMORA (la base de datos también lo exige)
+const isOwner = () => !!(S.me && S.me.role === 'admin' && S.me.owner === true && S.me.username === 'MMORA');
 
 // ───────────────────────── Utilidades ─────────────────────────
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -616,6 +620,7 @@ async function viewRecord(id, keepScroll = false) {
         ['bitacora', ICON.msg, 'Bitácora', d.entries.length],
         ['equipos', ICON.chip, 'Equipos e IPs', d.equipment.length],
         ['fotos', ICON.img, 'Fotos', photosCount],
+        ...(d.quotes ? [['cotizaciones', ICON.lock, 'Cotizaciones', d.quotes.length]] : []),
         ['ficha', ICON.info, 'Ficha', ''],
         ['historial', ICON.clock, 'Historial', ''],
       ].map(([k, ic, lb, n]) => `<button role="tab" data-tab="${k}" class="${S.tab === k ? 'on' : ''}">${ic}${lb}${n !== '' ? ` <span>${n}</span>` : ''}</button>`).join('')}
@@ -690,7 +695,76 @@ function statusModal(r, s) {
 
 function drawTab() {
   const box = document.getElementById('tab');
-  ({ bitacora: tabLog, equipos: tabEquip, fotos: tabPhotos, ficha: tabInfo, historial: tabHistory })[S.tab](box);
+  if (S.tab === 'cotizaciones' && !REC.quotes) S.tab = 'bitacora';
+  ({ bitacora: tabLog, equipos: tabEquip, fotos: tabPhotos, cotizaciones: tabQuotes, ficha: tabInfo, historial: tabHistory })[S.tab](box);
+}
+
+// ── Cotizaciones (privadas: solo el usuario principal) ──
+const QUOTE_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.xlsx,.xls,.docx,.doc';
+const fCLP = (n) => (n === null || n === undefined || n === '' ? '' : '$' + Number(n).toLocaleString('es-CL'));
+function tabQuotes(box) {
+  const qs = REC.quotes || [];
+  const head = `<div class="note" style="margin-bottom:16px;display:flex;gap:10px;align-items:flex-start">${ICON.lock.replace('<svg', '<svg style="width:18px;height:18px;flex:none;color:var(--accent)"')}<span><b>Sección privada.</b> Solo tú (MMORA) puedes ver, subir o eliminar cotizaciones. Los técnicos y los demás administradores no ven esta pestaña ni pueden abrir los archivos.</span></div>`;
+  if (!REC.quotesReady) {
+    box.innerHTML = head + `<div class="empty panel">${ICON.lock}<p>Falta activar las cotizaciones en la base de datos.<br><span class="dim">Ejecuta <b>supabase/actualizacion-7-cotizaciones.sql</b> en Supabase → SQL Editor.</span></p></div>`;
+    return;
+  }
+  const total = qs.reduce((a, q) => a + (q.amount || 0), 0);
+  box.innerHTML = head + `
+    <div class="toolbar"><span class="dim grow" style="font-size:13px">${qs.length ? `${qs.length} cotización${qs.length === 1 ? '' : 'es'}${total ? ` · suma ${esc(fCLP(total))}` : ''}` : ''}</span>
+      <button class="btn primary" id="qadd">${ICON.plus} Subir cotización</button></div>
+    ${qs.length ? `<div class="docs">${qs.map((q) => `<div class="doc" data-id="${q.id}" style="flex-wrap:wrap">
+        ${ICON.pdf}
+        <a href="${esc(q.url)}" target="_blank" rel="noopener" style="flex-direction:column;gap:2px">
+          <span><b style="color:var(--ink);font-size:13.5px">${esc(q.number || q.fileName || 'Cotización')}</b>${q.amount !== null ? ` <span class="mono" style="color:var(--accent);margin-left:6px">${esc(fCLP(q.amount))}</span>` : ''}</span>
+          <small class="dim" style="font-size:12px;white-space:normal">${esc(q.fileName)} · ${esc(fDate(q.at))} ${esc(fTime(q.at))}${q.notes ? ' · ' + esc(q.notes) : ''}</small>
+        </a>
+        <b>Abrir</b>
+        <button class="btn ghost icon sm" data-qe title="Editar datos" aria-label="Editar datos">${ICON.edit}</button>
+        <button class="btn ghost icon sm" data-qd title="Eliminar" aria-label="Eliminar">${ICON.trash}</button>
+      </div>`).join('')}</div>`
+    : `<div class="empty panel">${ICON.money}<p>Este levantamiento aún no tiene cotizaciones.<br><span class="dim">Sube el PDF (o Excel, Word, imagen) de la cotización enviada al cliente.</span></p></div>`}`;
+  box.querySelector('#qadd').onclick = () => quoteForm(null);
+  box.querySelectorAll('[data-qe]').forEach((b) => (b.onclick = () => quoteForm(qs.find((x) => x.id === b.closest('.doc').dataset.id))));
+  box.querySelectorAll('[data-qd]').forEach((b) => (b.onclick = async () => {
+    if (await confirmModal({ title: 'Eliminar cotización', text: 'La cotización y su archivo se eliminarán definitivamente.', okLabel: 'Eliminar', danger: true })) {
+      try { await api(`/api/quotes/${b.closest('.doc').dataset.id}`, { method: 'DELETE' }); toast('Cotización eliminada'); reloadRecord(); } catch (e) { toastErr(e); }
+    }
+  }));
+}
+function quoteForm(q) {
+  const nextNum = `COT-${new Date().getFullYear()}-`;
+  openModal({
+    title: q ? 'Editar cotización' : 'Subir cotización',
+    body: `<form id="qf" class="grid2">
+      ${q ? '' : `<label class="field span2"><span>Archivo *</span><input class="input" type="file" name="file" accept="${QUOTE_ACCEPT}" required></label>`}
+      <label class="field"><span>N° de cotización</span><input class="input mono" name="number" maxlength="60" placeholder="${nextNum}1" value="${esc(q ? q.number : '')}"></label>
+      <label class="field"><span>Monto total (con IVA)</span><input class="input mono" name="amount" inputmode="numeric" maxlength="16" placeholder="$0" value="${q && q.amount !== null ? esc(Number(q.amount).toLocaleString('es-CL')) : ''}"></label>
+      <label class="field span2"><span>Notas</span><textarea class="input" name="notes" maxlength="1000" style="min-height:70px" placeholder="Ej: versión 2, incluye 4 cámaras y NVR">${esc(q ? q.notes : '')}</textarea></label>
+      <p class="err span2" id="qe"></p>
+    </form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="qf" id="qok">${q ? 'Guardar' : 'Subir'}</button>`,
+    onMount: (el, close) => {
+      const amt = el.querySelector('[name="amount"]');
+      amt.addEventListener('input', () => { const d = amt.value.replace(/\D/g, ''); amt.value = d ? Number(d).toLocaleString('es-CL') : ''; });
+      el.querySelector('#qf').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const f = e.target; const btn = el.querySelector('#qok');
+        const body = { number: f.number.value, amount: f.amount.value, notes: f.notes.value };
+        try {
+          btn.disabled = true; btn.textContent = q ? 'Guardando…' : 'Subiendo…';
+          if (q) await api(`/api/quotes/${q.id}`, { method: 'PATCH', body });
+          else {
+            const file = f.file.files[0];
+            if (!file) throw new Error('Selecciona el archivo de la cotización');
+            if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} supera los 20 MB`);
+            await api(`/api/records/${REC.record.id}/quotes`, { method: 'POST', body: { ...body, file } });
+          }
+          close(); toast(q ? 'Cotización actualizada' : 'Cotización subida'); reloadRecord();
+        } catch (ex) { el.querySelector('#qe').textContent = ex.message; btn.disabled = false; btn.textContent = q ? 'Guardar' : 'Subir'; }
+      });
+    },
+  });
 }
 
 // ── Bitácora ──
