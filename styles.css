@@ -555,3 +555,7 @@ a.doc:hover, .doc a:hover span { text-decoration: underline; }
 .opt.on { color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); box-shadow: 0 0 12px color-mix(in srgb, var(--c) 35%, transparent); }
 .opt:disabled { opacity: 1; }
 @media (max-width: 560px) { .step.branch .opts { flex-direction: column; align-items: center; } .opt { height: 22px; padding: 0 7px; font-size: 9px; } }
+
+/* Facturas (privado) */
+.kpis.k3 { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 700px) { .kpis.k3 { grid-template-columns: 1fr; } }

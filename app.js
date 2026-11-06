@@ -90,6 +90,7 @@ const ICON = {
   xls: I('<rect x="4" y="3" width="16" height="18" rx="2"/><path d="m9 8 6 8M15 8l-6 8"/>'),
   lock: I('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
   money: I('<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9.5v5M18 9.5v5"/>'),
+  invoice: I('<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>'),
 };
 
 // ───────────────────────── Estado ─────────────────────────
@@ -336,8 +337,10 @@ function navItems() {
     { r: 'mantenciones', n: '04', label: 'Mantenciones', icon: ICON.wrench, count: S.records.filter((x) => { const d = dueInfo(x); return d && d.days <= 7; }).length },
     { r: 'reparaciones', n: '05', label: 'Reparaciones', icon: ICON.repair, count: S.records.filter((x) => x.kind === 'reparacion' && x.status !== 'finalizado').length },
   ];
-  if (isAdmin()) items.push({ r: 'usuarios', n: '06', label: 'Usuarios', icon: ICON.users });
-  items.push({ r: 'perfil', n: isAdmin() ? '07' : '06', label: 'Mi cuenta', icon: ICON.user });
+  if (isOwner()) items.push({ r: 'facturas', label: 'Facturas', icon: ICON.invoice, count: S.invPending || 0 });
+  if (isAdmin()) items.push({ r: 'usuarios', label: 'Usuarios', icon: ICON.users });
+  items.push({ r: 'perfil', label: 'Mi cuenta', icon: ICON.user });
+  items.forEach((it, i) => { it.n = String(i + 1).padStart(2, '0'); });
   return items;
 }
 function shell(active, content) {
@@ -358,7 +361,7 @@ function shell(active, content) {
       <header class="topbar"><img src="img/logo.png" alt=""><b class="grow">MTS OPS</b><button class="btn ghost icon notif-ico" data-notif aria-label="Avisos">${ICON.bell}<span class="nbadge ${unreadTotal() ? '' : 'hidden'}">${unreadTotal()}</span></button><a href="#/perfil" aria-label="Mi cuenta">${avatar(S.me)}</a><button class="btn ghost icon" id="logout2" aria-label="Cerrar sesión">${ICON.out}</button></header>
       <main class="main" id="main">${content}</main>
     </div>
-    <nav class="bottomnav" style="--cols:${items.length - 1}">${items.filter((it) => it.r !== 'perfil').map((it) => `<a href="#/${it.r}" class="${active === it.r ? 'on' : ''}">${it.icon}${({ Levantamientos: 'Levant.', Mantenciones: 'Mantenc.', Reparaciones: 'Repar.' })[it.label] || it.label}</a>`).join('')}</nav>
+    <nav class="bottomnav" style="--cols:${items.length - 1}">${items.filter((it) => it.r !== 'perfil').map((it) => `<a href="#/${it.r}" class="${active === it.r ? 'on' : ''}">${it.icon}${({ Levantamientos: 'Levant.', Mantenciones: 'Mantenc.', Reparaciones: 'Repar.', Facturas: 'Factur.', Usuarios: 'Usuar.' })[it.label] || it.label}</a>`).join('')}</nav>
   </div>`;
   const lo = async () => { window.mtsWatchAllEntries(null); window.mtsWatchMentions(null); S.ment = { unread: 0, items: [] }; await api('/api/logout', { method: 'POST' }).catch(() => {}); S.me = null; S.notif = { unread: 0, items: [] }; location.hash = ''; renderLogin(); };
   document.getElementById('logout').onclick = lo;
@@ -379,6 +382,7 @@ async function route() {
     if (a === 'reparaciones') return await viewList('reparacion');
     if (a === 'r' && b) return await viewRecord(b);
     if (a === 'usuarios' && isAdmin()) return await viewUsers();
+    if (a === 'facturas' && isOwner()) return await viewInvoices();
     if (a === 'perfil') return viewProfile();
     return await viewDashboard();
   } catch (e) {
@@ -1000,6 +1004,147 @@ function tabHistory(box) {
 }
 
 // ───────────────────────── Usuarios (solo administrador) ─────────────────────────
+// ───────────────────────── Facturas (privado: solo MMORA) ─────────────────────────
+const INV_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.xml,.xlsx,.xls';
+const INV_STATUS = { emitida: { label: 'Emitida', c: 'var(--amber)' }, pagada: { label: 'Pagada', c: 'var(--green)' } };
+const invOverdue = (f) => f.status === 'emitida' && f.dueDate && f.dueDate < todayYmd();
+async function viewInvoices() {
+  if (!S.records.length) await refreshRecords().catch(() => {});
+  const d = await api('/api/invoices');
+  const all = d.invoices || [];
+  S.invPending = all.filter((f) => f.status === 'emitida').length;
+  const lock = ICON.lock.replace('<svg', '<svg style="width:18px;height:18px;flex:none;color:var(--accent)"');
+  const head = `<div class="note" style="margin-bottom:16px;display:flex;gap:10px;align-items:flex-start">${lock}<span><b>Sección privada.</b> Solo tú (MMORA) puedes ver, subir o cambiar facturas. Los técnicos y los demás administradores no ven esta sección ni pueden abrir los archivos.</span></div>`;
+  if (!d.ready) {
+    shell('facturas', `<div class="page-h"><div class="grow"><span class="label">Privado</span><h1>Facturas</h1></div></div>${head}
+      <div class="empty panel">${ICON.invoice}<p>Falta activar las facturas en la base de datos.<br><span class="dim">Ejecuta <b>supabase/actualizacion-8-facturas.sql</b> en Supabase → SQL Editor.</span></p></div>`);
+    return;
+  }
+  const sum = (arr) => arr.reduce((a, f) => a + (f.amount || 0), 0);
+  const emit = all.filter((f) => f.status === 'emitida');
+  const month = todayYmd().slice(0, 7);
+  const paidMonth = all.filter((f) => f.status === 'pagada' && (f.paidDate || '').startsWith(month));
+  const overdue = emit.filter(invOverdue);
+  S.invFilter = S.invFilter || 'emitida';
+  shell('facturas', `
+    <div class="page-h"><div class="grow"><span class="label">Privado · ${all.length} factura${all.length === 1 ? '' : 's'}</span><h1>Facturas</h1></div>
+      <button class="btn primary" id="inew">${ICON.plus} Subir factura</button></div>
+    ${head}
+    <div class="kpis k3">
+      <div class="kpi panel" style="--c:var(--amber)"><span class="label">Por cobrar</span><div class="v" style="font-size:22px">${esc(fCLP(sum(emit)) || '$0')}</div><small class="dim">${emit.length} emitida${emit.length === 1 ? '' : 's'}</small><span class="bar"></span></div>
+      <div class="kpi panel" style="--c:var(--red)"><span class="label">Vencidas</span><div class="v" style="font-size:22px">${esc(fCLP(sum(overdue)) || '$0')}</div><small class="dim">${overdue.length} factura${overdue.length === 1 ? '' : 's'}</small><span class="bar"></span></div>
+      <div class="kpi panel" style="--c:var(--green)"><span class="label">Pagado este mes</span><div class="v" style="font-size:22px">${esc(fCLP(sum(paidMonth)) || '$0')}</div><small class="dim">${paidMonth.length} pago${paidMonth.length === 1 ? '' : 's'}</small><span class="bar"></span></div>
+    </div>
+    <div class="toolbar" style="margin:16px 0 12px">
+      <div class="seg" role="group" aria-label="Fase">${[['emitida', `Emitidas (${emit.length})`], ['pagada', `Pagadas (${all.length - emit.length})`], ['todas', 'Todas']].map(([k, l]) => `<button data-f="${k}" class="${S.invFilter === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <span class="grow"></span>
+      <input class="input" id="iq" placeholder="Buscar N°, cliente o proyecto" style="max-width:260px" value="${esc(S.invQ || '')}">
+    </div>
+    <div id="ilist"></div>`);
+  const draw = () => {
+    const q = (S.invQ || '').toLowerCase();
+    const list = all.filter((f) => (S.invFilter === 'todas' || f.status === S.invFilter) && (!q || [f.number, f.client, f.record && f.record.name, f.record && f.record.code, f.notes].join(' ').toLowerCase().includes(q)));
+    const box = document.getElementById('ilist');
+    if (!list.length) { box.innerHTML = `<div class="empty panel">${ICON.invoice}<p>${all.length ? 'No hay facturas con este filtro.' : 'Aún no subes facturas. Usa "Subir factura" para agregar la primera.'}</p></div>`; return; }
+    box.innerHTML = `<div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Cliente / proyecto</th><th>Monto</th><th>Emitida</th><th>Vence</th><th>Fase</th><th>Pago</th><th></th></tr></thead><tbody>
+      ${list.map((f) => { const st = INV_STATUS[f.status]; const od = invOverdue(f); return `<tr data-id="${f.id}">
+        <td class="mono"><b>${esc(f.number)}</b></td>
+        <td style="min-width:230px"><b>${esc(f.client || '—')}</b>${f.record ? `<div class="dim" style="font-size:12px"><a href="#/r/${f.record.id}">${esc(f.record.code)} · ${esc(f.record.name)}</a></div>` : ''}${f.notes ? `<div class="dim" style="font-size:12px">${esc(f.notes)}</div>` : ''}</td>
+        <td class="mono" style="white-space:nowrap">${esc(fCLP(f.amount) || '—')}</td>
+        <td style="white-space:nowrap">${esc(fYmd(f.issueDate))}</td>
+        <td style="white-space:nowrap;${od ? 'color:var(--red);font-weight:600' : ''}">${f.dueDate ? esc(fYmd(f.dueDate)) + (od ? ' · vencida' : '') : '<span class="dim">—</span>'}</td>
+        <td><span class="tag" style="--c:${st.c}">${st.label}</span></td>
+        <td style="white-space:nowrap">${f.status === 'pagada' ? `${esc(fYmd(f.paidDate))}${f.payMethod ? `<div class="dim" style="font-size:12px">${esc(f.payMethod)}</div>` : ''}` : '<span class="dim">—</span>'}</td>
+        <td style="white-space:nowrap;text-align:right">
+          ${f.url ? `<a class="btn sm" href="${esc(f.url)}" target="_blank" rel="noopener" title="Abrir factura">${ICON.pdf} Factura</a>` : ''}
+          ${f.proofUrl ? `<a class="btn sm" href="${esc(f.proofUrl)}" target="_blank" rel="noopener" title="Abrir comprobante de pago">${ICON.money} Comprobante</a>` : ''}
+          ${f.status === 'emitida' ? `<button class="btn sm primary" data-pay>${ICON.check} Marcar pagada</button>` : `<button class="btn sm" data-unpay title="Volver a Emitida">Deshacer pago</button>`}
+          <button class="btn ghost icon sm" data-ed title="Editar" aria-label="Editar">${ICON.edit}</button>
+          <button class="btn ghost icon sm" data-del title="Eliminar" aria-label="Eliminar">${ICON.trash}</button>
+        </td></tr>`; }).join('')}
+      </tbody></table></div>`;
+    const byRow = (b) => all.find((x) => x.id === b.closest('tr').dataset.id);
+    box.querySelectorAll('[data-pay]').forEach((b) => (b.onclick = () => invoicePayForm(byRow(b))));
+    box.querySelectorAll('[data-ed]').forEach((b) => (b.onclick = () => invoiceForm(byRow(b))));
+    box.querySelectorAll('[data-unpay]').forEach((b) => (b.onclick = async () => {
+      const f = byRow(b);
+      if (!(await confirmModal({ title: 'Volver a Emitida', text: `La factura ${f.number} volverá a quedar como emitida (por cobrar) y se borrará el comprobante de pago, si tiene.`, okLabel: 'Volver a Emitida' }))) return;
+      try { await api(`/api/invoices/${f.id}`, { method: 'PATCH', body: { status: 'emitida' } }); toast('Factura marcada como emitida'); viewInvoices(); } catch (e) { toastErr(e); }
+    }));
+    box.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async () => {
+      const f = byRow(b);
+      if (!(await confirmModal({ title: 'Eliminar factura', text: `La factura ${f.number} y sus archivos se eliminarán definitivamente.`, okLabel: 'Eliminar', danger: true }))) return;
+      try { await api(`/api/invoices/${f.id}`, { method: 'DELETE' }); toast('Factura eliminada'); viewInvoices(); } catch (e) { toastErr(e); }
+    }));
+  };
+  draw();
+  document.getElementById('inew').onclick = () => invoiceForm(null);
+  app.querySelectorAll('.seg button[data-f]').forEach((b) => (b.onclick = () => { S.invFilter = b.dataset.f; app.querySelectorAll('.seg button[data-f]').forEach((x) => x.classList.toggle('on', x === b)); draw(); }));
+  document.getElementById('iq').oninput = (e) => { S.invQ = e.target.value; draw(); };
+}
+const amountInput = (el) => { el.addEventListener('input', () => { const d = el.value.replace(/\D/g, ''); el.value = d ? Number(d).toLocaleString('es-CL') : ''; }); };
+function invoiceForm(f) {
+  const recs = S.records.filter((r) => r.kind !== 'levantamiento').sort((a, b) => String(b.code).localeCompare(String(a.code)));
+  openModal({
+    title: f ? `Editar factura ${f.number}` : 'Subir factura emitida',
+    body: `<form id="if" class="grid2">
+      <label class="field"><span>N° de factura *</span><input class="input mono" name="number" maxlength="40" required value="${esc(f ? f.number : '')}"></label>
+      <label class="field"><span>Monto total (con IVA)</span><input class="input mono" name="amount" inputmode="numeric" maxlength="16" placeholder="$0" value="${f && f.amount !== null ? esc(Number(f.amount).toLocaleString('es-CL')) : ''}"></label>
+      <label class="field span2"><span>Cliente</span><input class="input" name="client" maxlength="160" list="iclients" value="${esc(f ? f.client : '')}"><datalist id="iclients">${[...new Set(S.records.map((r) => r.client).filter(Boolean))].map((c) => `<option value="${esc(c)}">`).join('')}</datalist></label>
+      <label class="field span2"><span>Proyecto / trabajo asociado (opcional)</span><select class="input" name="recordId"><option value="">— Ninguno —</option>${recs.map((r) => `<option value="${r.id}" ${f && f.recordId === r.id ? 'selected' : ''}>${esc(r.code)} · ${esc(r.name)}${r.client ? ' (' + esc(r.client) + ')' : ''}</option>`).join('')}</select></label>
+      <label class="field"><span>Fecha de emisión</span><input class="input" type="date" name="issueDate" value="${esc(f ? f.issueDate : todayYmd())}"></label>
+      <label class="field"><span>Vencimiento (opcional)</span><input class="input" type="date" name="dueDate" value="${esc(f ? f.dueDate : '')}"></label>
+      <label class="field span2"><span>${f ? 'Reemplazar archivo de la factura (opcional)' : 'Archivo de la factura (PDF, imagen o XML) *'}</span><input class="input" type="file" name="file" accept="${INV_ACCEPT}" ${f ? '' : 'required'}></label>
+      <label class="field span2"><span>Notas</span><textarea class="input" name="notes" maxlength="1000" style="min-height:60px" placeholder="Ej: 50% anticipo, orden de compra 4512">${esc(f ? f.notes : '')}</textarea></label>
+      <p class="err span2" id="ie"></p>
+    </form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="if" id="iok">${f ? 'Guardar' : 'Subir factura'}</button>`,
+    onMount: (el, close) => {
+      amountInput(el.querySelector('[name="amount"]'));
+      el.querySelector('#if').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fm = e.target; const btn = el.querySelector('#iok'); const file = fm.file.files[0];
+        const body = { number: fm.number.value, amount: fm.amount.value, client: fm.client.value, recordId: fm.recordId.value, issueDate: fm.issueDate.value, dueDate: fm.dueDate.value, notes: fm.notes.value };
+        try {
+          if (!f && !file) throw new Error('Adjunta el archivo de la factura');
+          if (file && file.size > 20 * 1024 * 1024) throw new Error(`${file.name} supera los 20 MB`);
+          if (file) body.file = file;
+          btn.disabled = true; btn.textContent = f ? 'Guardando…' : 'Subiendo…';
+          if (f) await api(`/api/invoices/${f.id}`, { method: 'PATCH', body }); else await api('/api/invoices', { method: 'POST', body });
+          close(); toast(f ? 'Factura actualizada' : 'Factura subida como emitida'); if (!f) S.invFilter = 'emitida'; viewInvoices();
+        } catch (ex) { el.querySelector('#ie').textContent = ex.message; btn.disabled = false; btn.textContent = f ? 'Guardar' : 'Subir factura'; }
+      });
+    },
+  });
+}
+function invoicePayForm(f) {
+  openModal({
+    title: `Marcar pagada · Factura ${f.number}`,
+    body: `<form id="pf" class="grid2">
+      <p class="span2 dim" style="margin:0 0 4px">${esc(f.client || '')}${f.amount !== null ? ' · ' + esc(fCLP(f.amount)) : ''}</p>
+      <label class="field"><span>Fecha de pago *</span><input class="input" type="date" name="paidDate" required value="${esc(todayYmd())}"></label>
+      <label class="field"><span>Forma de pago</span><input class="input" name="payMethod" maxlength="60" list="ipm" placeholder="Transferencia"><datalist id="ipm"><option value="Transferencia"><option value="Cheque"><option value="Depósito"><option value="Efectivo"><option value="Tarjeta"></datalist></label>
+      <label class="field span2"><span>Comprobante de pago (opcional)</span><input class="input" type="file" name="proof" accept="${INV_ACCEPT}"></label>
+      <p class="err span2" id="pe"></p>
+    </form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="pf" id="pok">${ICON.check} Marcar pagada</button>`,
+    onMount: (el, close) => {
+      el.querySelector('#pf').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fm = e.target; const btn = el.querySelector('#pok'); const proof = fm.proof.files[0];
+        const body = { status: 'pagada', paidDate: fm.paidDate.value, payMethod: fm.payMethod.value };
+        try {
+          if (proof && proof.size > 20 * 1024 * 1024) throw new Error(`${proof.name} supera los 20 MB`);
+          if (proof) body.proof = proof;
+          btn.disabled = true; btn.textContent = 'Guardando…';
+          await api(`/api/invoices/${f.id}`, { method: 'PATCH', body });
+          close(); toast('Factura marcada como pagada'); viewInvoices();
+        } catch (ex) { el.querySelector('#pe').textContent = ex.message; btn.disabled = false; btn.textContent = 'Marcar pagada'; }
+      });
+    },
+  });
+}
+
 async function viewUsers() {
   await Promise.all([refreshUsers(), S.records.length ? null : refreshRecords()]);
   const users = [...S.users].sort((a, b) => (b.active - a.active) || (a.role === b.role ? a.name.localeCompare(b.name) : a.role === 'admin' ? -1 : 1));

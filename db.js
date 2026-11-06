@@ -134,6 +134,31 @@
     }
     return rows.map((q) => ({ ...toCamel(q), amount: q.amount === null ? null : Number(q.amount), url: urls[q.path] || '' }));
   }
+  // Facturas: solo el usuario principal MMORA (la base de datos lo vuelve a validar)
+  const INVOICE_BUCKET = 'facturas';
+  const requireOwnerInv = () => { if (!isOwner()) fail(403, 'Solo el usuario principal puede ver las facturas'); };
+  const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+  const money = (v) => { const d = String(v ?? '').replace(/[^\d]/g, ''); return d ? Number(d) : null; };
+  async function uploadPrivate(bucket, folder, file) {
+    if (!(file instanceof Blob)) return null;
+    if (file.size > 20 * 1024 * 1024) fail(400, 'El archivo es demasiado grande (máximo 20 MB)');
+    const orig = String(file.name || 'archivo');
+    const ext = (/\.([a-z0-9]{2,5})$/i.exec(orig) || [, 'pdf'])[1].toLowerCase();
+    const safe = orig.replace(/\.[^.]+$/, '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w.\-]+/g, '_').slice(0, 80) || 'archivo';
+    const path = `${folder}/${uuid()}__${safe}.${ext}`;
+    const up = await sb.storage.from(bucket).upload(path, file, { contentType: file.type || undefined, upsert: false });
+    if (up.error) fail(400, friendly(up.error));
+    return { path, name: orig.slice(0, 120) };
+  }
+  async function invoicesWithUrls(rows) {
+    const paths = rows.flatMap((x) => [x.path, x.proof_path]).filter(Boolean);
+    const urls = {};
+    for (let i = 0; i < paths.length; i += 100) {
+      const { data } = await sb.storage.from(INVOICE_BUCKET).createSignedUrls(paths.slice(i, i + 100), 600); // 10 minutos
+      (data || []).forEach((d) => { if (d.signedUrl) urls[d.path] = d.signedUrl; });
+    }
+    return rows.map((x) => ({ ...toCamel(x), amount: x.amount === null ? null : Number(x.amount), dueDate: x.due_date || '', paidDate: x.paid_date || '', url: urls[x.path] || '', proofUrl: urls[x.proof_path] || '', record: x.records || null }));
+  }
 
   function summarize(r) {
     const o = toCamel(r);
@@ -406,6 +431,61 @@
           const q = check(await sb.from('quotes').select('path').eq('id', seg[2]).maybeSingle());
           if (q) await sb.storage.from(QUOTE_BUCKET).remove([q.path]);
           check(await sb.from('quotes').delete().eq('id', seg[2]));
+          return { ok: true };
+        }
+      }
+      // Facturas (solo usuario principal)
+      if (seg[1] === 'invoices') {
+        requireOwnerInv();
+        if (!seg[2] && method === 'GET') {
+          const r = await sb.from('invoices').select('*, records(id,code,name,kind)').order('issue_date', { ascending: false }).order('at', { ascending: false });
+          if (r.error) return { invoices: [], ready: false }; // falta ejecutar la actualización 8
+          return { invoices: await invoicesWithUrls(r.data), ready: true };
+        }
+        if (!seg[2] && method === 'POST') {
+          const number = String(body.number || '').trim().slice(0, 40);
+          if (!number) fail(400, 'Ingresa el número de la factura');
+          const up = await uploadPrivate(INVOICE_BUCKET, 'emitidas', body.file);
+          if (!up) fail(400, 'Adjunta el archivo de la factura');
+          const ins = await sb.from('invoices').insert({
+            number, client: String(body.client || '').trim().slice(0, 160), record_id: body.recordId || null,
+            amount: money(body.amount), issue_date: ymd(body.issueDate) || undefined, due_date: ymd(body.dueDate),
+            notes: String(body.notes || '').trim().slice(0, 1000), path: up.path, file_name: up.name, user_id: me.id,
+          }).select().single();
+          if (ins.error) { await sb.storage.from(INVOICE_BUCKET).remove([up.path]); fail(400, friendly(ins.error)); }
+          return { invoice: toCamel(ins.data) };
+        }
+        if (seg[2] && method === 'PATCH') {
+          const prev = check(await sb.from('invoices').select('*').eq('id', seg[2]).maybeSingle());
+          if (!prev) fail(404, 'Factura no encontrada');
+          const upd = { updated_at: new Date().toISOString() };
+          if ('number' in body) { upd.number = String(body.number || '').trim().slice(0, 40); if (!upd.number) fail(400, 'Ingresa el número de la factura'); }
+          if ('client' in body) upd.client = String(body.client || '').trim().slice(0, 160);
+          if ('recordId' in body) upd.record_id = body.recordId || null;
+          if ('amount' in body) upd.amount = money(body.amount);
+          if ('issueDate' in body && ymd(body.issueDate)) upd.issue_date = ymd(body.issueDate);
+          if ('dueDate' in body) upd.due_date = ymd(body.dueDate);
+          if ('notes' in body) upd.notes = String(body.notes || '').trim().slice(0, 1000);
+          const removeLater = [];
+          if (body.file instanceof Blob) { const up = await uploadPrivate(INVOICE_BUCKET, 'emitidas', body.file); upd.path = up.path; upd.file_name = up.name; if (prev.path) removeLater.push(prev.path); }
+          if (body.status === 'pagada') {
+            upd.status = 'pagada'; upd.paid_date = ymd(body.paidDate) || new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+            if ('payMethod' in body) upd.pay_method = String(body.payMethod || '').trim().slice(0, 60);
+            if (body.proof instanceof Blob) { const up = await uploadPrivate(INVOICE_BUCKET, 'pagos', body.proof); upd.proof_path = up.path; upd.proof_name = up.name; if (prev.proof_path) removeLater.push(prev.proof_path); }
+          } else if (body.status === 'emitida') {
+            upd.status = 'emitida'; upd.paid_date = null; upd.pay_method = '';
+            if (prev.proof_path) removeLater.push(prev.proof_path);
+            upd.proof_path = ''; upd.proof_name = '';
+          }
+          const r = check(await sb.from('invoices').update(upd).eq('id', seg[2]).select());
+          if (!r.length) fail(404, 'Factura no encontrada');
+          if (removeLater.length) await sb.storage.from(INVOICE_BUCKET).remove(removeLater);
+          return { invoice: toCamel(r[0]) };
+        }
+        if (seg[2] && method === 'DELETE') {
+          const prev = check(await sb.from('invoices').select('path,proof_path').eq('id', seg[2]).maybeSingle());
+          if (prev) { const ps = [prev.path, prev.proof_path].filter(Boolean); if (ps.length) await sb.storage.from(INVOICE_BUCKET).remove(ps); }
+          check(await sb.from('invoices').delete().eq('id', seg[2]));
           return { ok: true };
         }
       }
