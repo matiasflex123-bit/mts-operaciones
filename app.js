@@ -417,9 +417,20 @@ async function viewDashboard() {
       <div class="kpi panel" style="--c:var(--violet)"><span class="label">Por facturar</span><div class="v">${p.facturacion + ((d.byStatus.reparacion || {}).facturacion || 0)}</div><span class="bar"></span></div>
       <div class="kpi panel" style="--c:var(--cyan)"><span class="label">Registros hoy</span><div class="v">${d.totals.entriesToday}</div><span class="bar"></span></div>
     </div>
-    ${mentionsPanel()}
     <div class="dash">
-      <section class="panel hud">
+      <div class="stack">
+        <section class="panel"><div class="panel-h"><h2 class="grow">Proyectos por estado</h2><a class="label" href="#/proyectos">Ver todos →</a></div><div class="panel-b sbars">${bars('proyecto')}</div></section>
+        <section class="panel"><div class="panel-h"><h2 class="grow">Reparaciones</h2><a class="label" href="#/reparaciones">Ver todas →</a></div><div class="panel-b sbars">${bars('reparacion')}</div></section>
+        <section class="panel"><div class="panel-h"><h2 class="grow">Próximas mantenciones</h2><a class="label" href="#/mantenciones">Ver todas →</a></div><div class="panel-b" style="padding-top:6px;padding-bottom:6px">${upcomingMaint()}</div></section>
+        <section class="panel"><div class="panel-h"><h2 class="grow">Levantamientos</h2><a class="label" href="#/levantamientos">Ver todos →</a></div><div class="panel-b sbars">${bars('levantamiento')}</div></section>
+        <section class="panel"><div class="panel-b row wrap" style="gap:24px">
+          <div><span class="label">Equipos registrados</span><div class="mono" style="font-size:22px;margin-top:4px">${d.totals.equipment}</div></div>
+          <div><span class="label">Fotos de terreno</span><div class="mono" style="font-size:22px;margin-top:4px">${d.totals.photos}</div></div>
+          <div><span class="label">Usuarios activos</span><div class="mono" style="font-size:22px;margin-top:4px">${d.totals.users}</div></div>
+        </div></section>
+      </div>
+      <div class="stack">
+        <section class="panel hud">
         <div class="panel-h"><h2 class="grow">Actividad reciente</h2><span class="label">Tiempo real</span></div>
         <div class="panel-b" style="padding-top:4px;padding-bottom:4px">
           ${d.recent.length ? `<div class="feed dash-feed">${d.recent.slice(0, 30).map((a) => {
@@ -431,16 +442,7 @@ async function viewDashboard() {
           }).join('')}</div>` : `<div class="empty">${ICON.clock}<p>Aún no hay actividad. ${isAdmin() ? 'Crea tu primer proyecto para comenzar.' : ''}</p></div>`}
         </div>
       </section>
-      <div class="stack">
-        <section class="panel"><div class="panel-h"><h2 class="grow">Proyectos por estado</h2><a class="label" href="#/proyectos">Ver todos →</a></div><div class="panel-b sbars">${bars('proyecto')}</div></section>
-        <section class="panel"><div class="panel-h"><h2 class="grow">Reparaciones</h2><a class="label" href="#/reparaciones">Ver todas →</a></div><div class="panel-b sbars">${bars('reparacion')}</div></section>
-        <section class="panel"><div class="panel-h"><h2 class="grow">Próximas mantenciones</h2><a class="label" href="#/mantenciones">Ver todas →</a></div><div class="panel-b" style="padding-top:6px;padding-bottom:6px">${upcomingMaint()}</div></section>
-        <section class="panel"><div class="panel-h"><h2 class="grow">Levantamientos</h2><a class="label" href="#/levantamientos">Ver todos →</a></div><div class="panel-b sbars">${bars('levantamiento')}</div></section>
-        <section class="panel"><div class="panel-b row wrap" style="gap:24px">
-          <div><span class="label">Equipos registrados</span><div class="mono" style="font-size:22px;margin-top:4px">${d.totals.equipment}</div></div>
-          <div><span class="label">Fotos de terreno</span><div class="mono" style="font-size:22px;margin-top:4px">${d.totals.photos}</div></div>
-          <div><span class="label">Usuarios activos</span><div class="mono" style="font-size:22px;margin-top:4px">${d.totals.users}</div></div>
-        </div></section>
+        ${mentionsPanel()}
       </div>
     </div>`);
   app.querySelectorAll('[data-new]').forEach((b) => (b.onclick = () => recordForm(b.dataset.new)));
@@ -1358,7 +1360,7 @@ function mentionItem(m) {
 function mentionsPanel() {
   const items = S.ment.items.slice(0, 8);
   if (!items.length) return '';
-  return `<section class="panel hud ment-panel" style="margin-bottom:18px">
+  return `<section class="panel hud ment-panel">
     <div class="panel-h"><h2 class="grow">${ICON.bell} Te mencionaron${S.ment.unread ? ` <span class="nbadge" style="position:static;margin-left:6px">${S.ment.unread}</span>` : ''}</h2>
       ${S.ment.unread ? '<button class="btn sm ghost" id="ment-all">Marcar todas como leídas</button>' : ''}</div>
     <div class="nlist" style="margin:0;max-height:none">${items.map(mentionItem).join('')}</div></section>`;
