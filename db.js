@@ -160,6 +160,12 @@
     return rows.map((x) => ({ ...toCamel(x), amount: x.amount === null ? null : Number(x.amount), dueDate: x.due_date || '', paidDate: x.paid_date || '', url: urls[x.path] || '', proofUrl: urls[x.proof_path] || '', record: x.records || null }));
   }
 
+  // Días de trabajo: códigos de 6 caracteres sin letras confusas (sin I, O, 0, 1)
+  const WC_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const genWorkCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => WC_ALPHA[b % 32]).join('');
+  const todayCL = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Santiago' });
+  const WC_SEL = '*, records(id,code,name,kind,client,status)';
+
   function summarize(r) {
     const o = toCamel(r);
     o.counts = { entries: (r.entries && r.entries[0] && r.entries[0].count) || 0, photos: (r.photos && r.photos[0] && r.photos[0].count) || 0, equipment: (r.equipment && r.equipment[0] && r.equipment[0].count) || 0 };
@@ -511,6 +517,82 @@
         return { ok: true };
       }
       if (p === '/api/notifications/seen') { check(await sb.rpc('mark_notifications_seen')); return { ok: true }; }
+
+      // ── Días de trabajo (rendición con código) ──
+      if (p === '/api/workday/check' && method === 'POST') {
+        const r = await sb.rpc('work_code_check', { p_code: String(body.code || '') });
+        if (r.error && /work_code_check|schema cache|does not exist/i.test(r.error.message || '')) fail(400, 'La rendición de días aún no está activada. Avisa al administrador.');
+        const d = check(r);
+        if (!d || !d.ok) fail(400, (d && d.error) || 'Código no válido');
+        return d;
+      }
+      if (p === '/api/workday/redeem' && method === 'POST') {
+        const d = check(await sb.rpc('work_code_redeem', { p_code: String(body.code || ''), p_start: String(body.start || ''), p_end: String(body.end || ''), p_summary: String(body.summary || '') }));
+        if (!d || !d.ok) fail(400, (d && d.error) || 'No se pudo rendir el día');
+        return d;
+      }
+      if (p === '/api/workdays/mine' && method === 'GET') {
+        const r = await sb.from('workdays').select('*').eq('user_id', me.id).order('work_date', { ascending: false }).order('created_at', { ascending: false }).limit(500);
+        if (r.error) return { items: [], ready: false }; // falta ejecutar la actualización 9
+        return { items: r.data.map(toCamel), ready: true };
+      }
+      if (seg[1] === 'workcodes' || seg[1] === 'workdays') {
+        if (!isOwner()) fail(403, 'Solo el usuario principal puede administrar los días trabajados');
+        if (p === '/api/workcodes' && method === 'GET') {
+          const r = await sb.from('work_codes').select(WC_SEL).order('created_at', { ascending: false }).limit(300);
+          if (r.error) return { codes: [], ready: false };
+          return { codes: r.data.map((x) => ({ ...toCamel(x), record: x.records || null })), ready: true };
+        }
+        if (p === '/api/workcodes' && method === 'POST') {
+          if (!body.recordId) fail(400, 'Elige el proyecto, mantención o levantamiento');
+          const rate = money(body.rate);
+          if (rate === null) fail(400, 'Ingresa el valor del día');
+          const workDate = ymd(body.workDate);
+          if (!workDate) fail(400, 'Ingresa la fecha del día de trabajo');
+          const expiresOn = ymd(body.expiresOn) || workDate;
+          if (expiresOn < workDate) fail(400, 'El código no puede vencer antes del día de trabajo');
+          for (let i = 0; i < 5; i++) {
+            const r = await sb.from('work_codes').insert({
+              code: genWorkCode(), record_id: body.recordId, tech_id: body.techId || null, work_date: workDate,
+              expires_on: expiresOn, rate, notes: String(body.notes || '').trim().slice(0, 500),
+            }).select(WC_SEL).single();
+            if (!r.error) return { code: { ...toCamel(r.data), record: r.data.records || null } };
+            if (!/duplicate|unique/i.test(r.error.message || '')) fail(400, friendly(r.error));
+          }
+          fail(400, 'No se pudo generar un código único, intenta de nuevo');
+        }
+        if (seg[1] === 'workcodes' && seg[2] && method === 'DELETE') {
+          const r = check(await sb.from('work_codes').delete().eq('id', seg[2]).is('used_at', null).select('id'));
+          if (!r || !r.length) fail(400, 'Ese código ya fue usado y no se puede eliminar');
+          return { ok: true };
+        }
+        if (p === '/api/workdays' && method === 'GET') {
+          const r = await sb.from('workdays').select('*').order('work_date', { ascending: false }).order('created_at', { ascending: false }).limit(3000);
+          if (r.error) return { items: [], ready: false };
+          return { items: r.data.map(toCamel), ready: true };
+        }
+        if (p === '/api/workdays/pay' && method === 'POST') {
+          const ids = Array.isArray(body.ids) ? body.ids.filter(Boolean) : [];
+          if (!ids.length) fail(400, 'No hay días seleccionados');
+          const r = check(await sb.from('workdays').update({
+            status: 'pagado', paid_date: ymd(body.paidDate) || todayCL(),
+            pay_method: String(body.payMethod || '').trim().slice(0, 60), pay_note: String(body.payNote || '').trim().slice(0, 200),
+          }).in('id', ids).select('id'));
+          return { ok: true, n: (r || []).length };
+        }
+        if (seg[1] === 'workdays' && seg[2] && method === 'PATCH') {
+          const upd = {};
+          if (body.status === 'pendiente') Object.assign(upd, { status: 'pendiente', paid_date: null, pay_method: '', pay_note: '' });
+          if ('rate' in body) { const v = money(body.rate); if (v === null) fail(400, 'Ingresa el valor del día'); upd.rate = v; }
+          const r = check(await sb.from('workdays').update(upd).eq('id', seg[2]).select('id'));
+          if (!r || !r.length) fail(404, 'Registro no encontrado');
+          return { ok: true };
+        }
+        if (seg[1] === 'workdays' && seg[2] && method === 'DELETE') {
+          check(await sb.from('workdays').delete().eq('id', seg[2]));
+          return { ok: true };
+        }
+      }
 
       // Respaldo (descarga JSON con todos los datos, sin fotos)
       if (p === '/api/backup') {

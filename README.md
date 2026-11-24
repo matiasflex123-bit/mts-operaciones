@@ -16,9 +16,11 @@ Plataforma privada para el personal de **MTS SECURITY SPA**: proyectos, levantam
 | Crear usuarios, eliminar contenido, respaldos | ✔ | — |
 | Cotizaciones de los levantamientos | solo MMORA (usuario principal) | — |
 | Facturas (emitidas / pagadas) | solo MMORA (usuario principal) | — |
+| Rendir día de trabajo (con código) | ✔ | ✔ (ve solo sus días y montos) |
+| Generar códigos, fijar valor del día y marcar pagos | solo MMORA (usuario principal) | — |
 
 ## Instalación
-1. En Supabase → **SQL Editor**, pegar y ejecutar `supabase/instalacion.sql` y luego las actualizaciones (`supabase/actualizacion-*.sql`), incluidas la 7 (cotizaciones privadas) y la 8 (facturas privadas).
+1. En Supabase → **SQL Editor**, pegar y ejecutar `supabase/instalacion.sql` y luego las actualizaciones (`supabase/actualizacion-*.sql`), incluidas la 7 (cotizaciones privadas), la 8 (facturas privadas) y la 9 (días trabajados: `supabase/actualizacion-9-dias-trabajados.sql`).
 2. En Supabase → **Authentication → Sign In / Providers**: desactivar *Allow new users to sign up* y *Confirm email*.
 3. Copiar la *Project URL* y la clave *anon public* (Project Settings → API) en `config.js`.
 4. Subir esta carpeta a GitHub y activar **Settings → Pages** (rama `main`, carpeta raíz).

@@ -90,6 +90,8 @@ const ICON = {
   xls: I('<rect x="4" y="3" width="16" height="18" rx="2"/><path d="m9 8 6 8M15 8l-6 8"/>'),
   lock: I('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
   money: I('<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9.5v5M18 9.5v5"/>'),
+  ticket: I('<path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M14 6v2M14 11v2M14 16v2"/>'),
+  work: I('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 13h18"/>'),
   invoice: I('<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>'),
 };
 
@@ -338,6 +340,8 @@ function navItems() {
     { r: 'reparaciones', n: '05', label: 'Reparaciones', icon: ICON.repair, count: S.records.filter((x) => x.kind === 'reparacion' && x.status !== 'finalizado').length },
   ];
   if (isOwner()) items.push({ r: 'facturas', label: 'Facturas', icon: ICON.invoice, count: S.invPending || 0 });
+  if (isOwner()) items.push({ r: 'dias', label: 'Días trabajados', icon: ICON.work, count: S.wdPending || 0 });
+  else items.push({ r: 'mis-dias', label: 'Mis días', icon: ICON.work });
   if (isAdmin()) items.push({ r: 'usuarios', label: 'Usuarios', icon: ICON.users });
   items.push({ r: 'perfil', label: 'Mi cuenta', icon: ICON.user });
   items.forEach((it, i) => { it.n = String(i + 1).padStart(2, '0'); });
@@ -351,6 +355,7 @@ function shell(active, content) {
       <div class="brand"><img src="img/logo.png" alt=""><div><b>MTS SECURITY</b><small>OPERACIONES</small></div></div>
       <nav class="nav">${items.map((it) => `<a href="#/${it.r}" class="${active === it.r ? 'on' : ''}"><span class="n">${it.n}</span>${it.icon}${it.label}${it.count ? `<span class="count">${it.count}</span>` : ''}</a>`).join('')}</nav>
       <div class="side-foot">
+        <button class="btn primary rendir-btn" data-rendir>${ICON.ticket} Rendir día de trabajo</button>
         <button class="btn notif-btn" data-notif>${ICON.bell} Avisos <span class="nbadge ${unreadTotal() ? '' : 'hidden'}">${unreadTotal()}</span></button>
         <div class="me">${avatar(S.me)}<div class="grow"><b>${esc(S.me.name)}</b><small>${esc(S.me.role === 'admin' ? 'Administrador' : 'Técnico')}</small></div>
           <button class="btn ghost icon" id="logout" title="Cerrar sesión" aria-label="Cerrar sesión">${ICON.out}</button></div>
@@ -358,15 +363,16 @@ function shell(active, content) {
       </div>
     </aside>
     <div>
-      <header class="topbar"><img src="img/logo.png" alt=""><b class="grow">MTS OPS</b><button class="btn ghost icon notif-ico" data-notif aria-label="Avisos">${ICON.bell}<span class="nbadge ${unreadTotal() ? '' : 'hidden'}">${unreadTotal()}</span></button><a href="#/perfil" aria-label="Mi cuenta">${avatar(S.me)}</a><button class="btn ghost icon" id="logout2" aria-label="Cerrar sesión">${ICON.out}</button></header>
+      <header class="topbar"><img src="img/logo.png" alt=""><b class="grow">MTS OPS</b><button class="btn primary sm rendir-top" data-rendir aria-label="Rendir día de trabajo">${ICON.ticket}<span>Rendir día</span></button><button class="btn ghost icon notif-ico" data-notif aria-label="Avisos">${ICON.bell}<span class="nbadge ${unreadTotal() ? '' : 'hidden'}">${unreadTotal()}</span></button><a href="#/perfil" aria-label="Mi cuenta">${avatar(S.me)}</a><button class="btn ghost icon" id="logout2" aria-label="Cerrar sesión">${ICON.out}</button></header>
       <main class="main" id="main">${content}</main>
     </div>
-    <nav class="bottomnav" style="--cols:${items.length - 1}">${items.filter((it) => it.r !== 'perfil').map((it) => `<a href="#/${it.r}" class="${active === it.r ? 'on' : ''}">${it.icon}${({ Levantamientos: 'Levant.', Mantenciones: 'Mantenc.', Reparaciones: 'Repar.', Facturas: 'Factur.', Usuarios: 'Usuar.' })[it.label] || it.label}</a>`).join('')}</nav>
+    <nav class="bottomnav" style="--cols:${items.length - 1}">${items.filter((it) => it.r !== 'perfil').map((it) => `<a href="#/${it.r}" class="${active === it.r ? 'on' : ''}">${it.icon}${({ Levantamientos: 'Levant.', Mantenciones: 'Mantenc.', Reparaciones: 'Repar.', Facturas: 'Factur.', Usuarios: 'Usuar.', 'Días trabajados': 'Días' })[it.label] || it.label}</a>`).join('')}</nav>
   </div>`;
   const lo = async () => { window.mtsWatchAllEntries(null); window.mtsWatchMentions(null); S.ment = { unread: 0, items: [] }; await api('/api/logout', { method: 'POST' }).catch(() => {}); S.me = null; S.notif = { unread: 0, items: [] }; location.hash = ''; renderLogin(); };
   document.getElementById('logout').onclick = lo;
   document.getElementById('logout2').onclick = lo;
   app.querySelectorAll('[data-notif]').forEach((b) => (b.onclick = openNotifications));
+  app.querySelectorAll('[data-rendir]').forEach((b) => (b.onclick = () => rendirDia()));
   window.scrollTo(0, 0);
 }
 
@@ -383,6 +389,8 @@ async function route() {
     if (a === 'r' && b) return await viewRecord(b);
     if (a === 'usuarios' && isAdmin()) return await viewUsers();
     if (a === 'facturas' && isOwner()) return await viewInvoices();
+    if (a === 'dias' && isOwner()) return await viewWorkdaysAdmin();
+    if (a === 'mis-dias') return await viewMyWorkdays();
     if (a === 'perfil') return viewProfile();
     return await viewDashboard();
   } catch (e) {
@@ -1147,6 +1155,337 @@ function invoicePayForm(f) {
   });
 }
 
+// ───────────────────────── Días de trabajo (rendición con código) ─────────────────────────
+const WD_STATUS = { pendiente: { label: 'Por pagar', c: 'var(--amber)' }, pagado: { label: 'Pagado', c: 'var(--green)' } };
+const wdCode = (c) => { const s = String(c || ''); return s.length === 6 ? `${s.slice(0, 3)}-${s.slice(3)}` : s; };
+const wdKind = (k) => (KIND[k] ? KIND[k].one : String(k || ''));
+const wdN = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const wdSum = (arr) => arr.reduce((a, w) => a + (Number(w.rate) || 0), 0);
+const wdHours = (w) => (w.startTime || w.endTime ? `${esc(w.startTime || '¿?')} – ${esc(w.endTime || '¿?')}` : '<span class="dim">—</span>');
+const wdJob = (w) => `<b>${esc(w.recordName || '—')}</b><div class="dim" style="font-size:12px">${w.recordId ? `<a href="#/r/${w.recordId}">${esc(w.recordCode)}</a>` : esc(w.recordCode)} · ${esc(wdKind(w.recordKind))}${w.client ? ' · ' + esc(w.client) : ''}</div>`;
+const wdAddDays = (ymd, n) => { const d = new Date(ymd + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const wdLock = (html) => `<div class="note" style="margin-bottom:16px;display:flex;gap:10px;align-items:flex-start">${ICON.lock.replace('<svg', '<svg style="width:18px;height:18px;flex:none;color:var(--accent)"')}<span>${html}</span></div>`;
+const wdKpi = (label, value, sub, c) => `<div class="kpi panel" style="--c:${c}"><span class="label">${label}</span><div class="v" style="font-size:22px">${esc(value)}</div><small class="dim">${sub}</small><span class="bar"></span></div>`;
+
+// Botón "Rendir día de trabajo": pide el código y recién ahí muestra el trabajo y el valor del día
+function rendirDia() {
+  let info = null;
+  openModal({
+    title: 'Rendir día de trabajo',
+    body: '<div id="rd"></div>',
+    onMount: (el, close) => {
+      const box = el.querySelector('#rd');
+      const step1 = () => {
+        box.innerHTML = `<form id="rd1">
+          <p class="muted" style="margin:0 0 14px">Ingresa el código que te entregó tu supervisor. El código indica el trabajo y el valor de tu día.</p>
+          <label class="field"><span>Código del día</span><input class="input mono rd-code" name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="7" placeholder="ABC-123" required></label>
+          <p class="err" id="rde"></p>
+          <div class="rd-actions"><button type="button" class="btn" data-x>Cancelar</button><button class="btn primary" id="rdb">${ICON.key} Validar código</button></div>
+        </form>`;
+        const inp = box.querySelector('[name="code"]');
+        inp.addEventListener('input', () => { const v = inp.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); inp.value = v.length > 3 ? `${v.slice(0, 3)}-${v.slice(3)}` : v; });
+        setTimeout(() => inp.focus(), 40);
+        box.querySelector('[data-x]').onclick = close;
+        box.querySelector('#rd1').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const btn = box.querySelector('#rdb');
+          btn.disabled = true; btn.textContent = 'Validando…';
+          try { info = await api('/api/workday/check', { method: 'POST', body: { code: inp.value } }); step2(); }
+          catch (ex) { box.querySelector('#rde').textContent = ex.message; btn.disabled = false; btn.innerHTML = `${ICON.key} Validar código`; }
+        });
+      };
+      const step2 = () => {
+        const r = info.record || {};
+        const row = (k, v) => (v ? `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>` : '');
+        box.innerHTML = `<div class="rd-job">
+            <span class="label">${esc(wdKind(r.kind))} · ${esc(r.code || '')}</span>
+            <h3>${esc(r.name || '')}</h3>
+            <dl class="rd-dl">${row('Cliente', r.client)}${row('Dirección', r.address)}${row('Responsable', r.responsible)}${row('Contacto', [r.contact, r.contactPhone].filter(Boolean).join(' · '))}${row('Día de trabajo', fDayLong(info.workDate + 'T15:00:00Z'))}</dl>
+            ${info.notes ? `<div class="note" style="margin-top:10px">${esc(info.notes)}</div>` : ''}
+          </div>
+          <div class="rd-pay"><span class="label">Valor de tu día</span><b>${esc(fCLP(info.rate) || '$0')}</b><small class="dim">Monto fijado por la administración. Al rendir queda registrado a tu nombre como "por pagar".</small></div>
+          <form id="rd2" class="grid2" style="margin-top:14px">
+            <label class="field"><span>Hora de llegada</span><input class="input" type="time" name="start"></label>
+            <label class="field"><span>Hora de salida</span><input class="input" type="time" name="end"></label>
+            <label class="field span2"><span>Trabajo realizado *</span><textarea class="input" name="summary" maxlength="2000" required style="min-height:90px" placeholder="Ej: Instalación de 4 cámaras en bodega, configuración del NVR y prueba de grabación."></textarea></label>
+            <p class="err span2" id="rde2"></p>
+            <div class="rd-actions span2"><button type="button" class="btn" data-back>${ICON.back} Otro código</button><button class="btn primary" id="rdok">${ICON.check} Rendir día</button></div>
+          </form>`;
+        box.querySelector('[data-back]').onclick = step1;
+        box.querySelector('#rd2').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const fm = e.target; const btn = box.querySelector('#rdok');
+          if (fm.summary.value.trim().length < 5) { box.querySelector('#rde2').textContent = 'Describe brevemente el trabajo que realizaste'; return; }
+          btn.disabled = true; btn.textContent = 'Enviando…';
+          try {
+            await api('/api/workday/redeem', { method: 'POST', body: { code: info.code, start: fm.start.value, end: fm.end.value, summary: fm.summary.value } });
+            close(); toast(`Día rendido · ${fCLP(info.rate) || '$0'} por pagar`);
+            const to = isOwner() ? '#/dias' : '#/mis-dias';
+            if (location.hash === to) route(); else location.hash = to;
+          } catch (ex) { box.querySelector('#rde2').textContent = ex.message; btn.disabled = false; btn.innerHTML = `${ICON.check} Rendir día`; }
+        });
+      };
+      step1();
+    },
+  });
+}
+
+// ── Mis días (cada técnico ve solo lo suyo) ──
+async function viewMyWorkdays() {
+  const d = await api('/api/workdays/mine');
+  const all = d.items || [];
+  const head = `<div class="page-h"><div class="grow"><span class="label">Mis rendiciones</span><h1>Mis días trabajados</h1></div><button class="btn primary" data-rendir>${ICON.ticket} Rendir día de trabajo</button></div>`;
+  if (!d.ready) {
+    shell('mis-dias', `${head}<div class="empty panel">${ICON.work}<p>La rendición de días aún no está activada.<br><span class="dim">Avisa al administrador.</span></p></div>`);
+    return;
+  }
+  const month = todayYmd().slice(0, 7);
+  const pend = all.filter((w) => w.status === 'pendiente');
+  const paidM = all.filter((w) => w.status === 'pagado' && String(w.paidDate || '').startsWith(month));
+  const daysM = all.filter((w) => String(w.workDate || '').startsWith(month));
+  const rows = all.map((w) => { const st = WD_STATUS[w.status] || WD_STATUS.pendiente; return `<tr>
+      <td style="white-space:nowrap">${esc(fYmd(w.workDate))}</td>
+      <td style="min-width:220px">${wdJob(w)}</td>
+      <td class="mono" style="white-space:nowrap">${wdHours(w)}</td>
+      <td class="wd-sum" title="${esc(w.summary)}">${esc(w.summary)}</td>
+      <td class="mono" style="white-space:nowrap"><b>${esc(fCLP(w.rate) || '$0')}</b></td>
+      <td style="white-space:nowrap"><span class="tag" style="--c:${st.c}">${st.label}</span>${w.status === 'pagado' && w.paidDate ? `<div class="dim" style="font-size:12px">${esc(fYmd(w.paidDate))}${w.payMethod ? ' · ' + esc(w.payMethod) : ''}</div>` : ''}</td></tr>`; }).join('');
+  shell('mis-dias', `${head}
+    <div class="kpis k3">
+      ${wdKpi('Por cobrar', fCLP(wdSum(pend)) || '$0', wdN(pend.length, 'día pendiente', 'días pendientes'), 'var(--amber)')}
+      ${wdKpi('Pagado este mes', fCLP(wdSum(paidM)) || '$0', wdN(paidM.length, 'día pagado', 'días pagados'), 'var(--green)')}
+      ${wdKpi('Días este mes', String(daysM.length), `${esc(fCLP(wdSum(daysM)) || '$0')} en total`, 'var(--cyan)')}
+    </div>
+    ${all.length ? `<div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>Día</th><th>Trabajo</th><th>Horario</th><th>Trabajo realizado</th><th>Valor</th><th>Estado</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : `<div class="empty panel">${ICON.work}<p>Aún no rindes días de trabajo.<br><span class="dim">Al terminar tu jornada, pide el código a tu supervisor y presiona "Rendir día de trabajo".</span></p></div>`}`);
+}
+
+// ── Días trabajados (privado: solo MMORA) ──
+async function viewWorkdaysAdmin() {
+  if (!S.records.length) await refreshRecords().catch(() => {});
+  const [dw, dc] = await Promise.all([api('/api/workdays'), api('/api/workcodes')]);
+  const note = wdLock('<b>Sección privada.</b> Solo tú (MMORA) generas los códigos, fijas el valor del día y marcas los pagos. Cada técnico ve únicamente sus propios días y montos en "Mis días".');
+  if (!dw.ready || !dc.ready) {
+    shell('dias', `<div class="page-h"><div class="grow"><span class="label">Privado</span><h1>Días trabajados</h1></div></div>${note}
+      <div class="empty panel">${ICON.work}<p>Falta activar la rendición de días en la base de datos.<br><span class="dim">Ejecuta <b>supabase/actualizacion-9-dias-trabajados.sql</b> en Supabase → SQL Editor.</span></p></div>`);
+    return;
+  }
+  const days = dw.items; const codes = dc.codes;
+  const today = todayYmd(); const month = today.slice(0, 7);
+  const pend = days.filter((w) => w.status === 'pendiente');
+  const paidM = days.filter((w) => w.status === 'pagado' && String(w.paidDate || '').startsWith(month));
+  const codeState = (c) => (c.usedAt ? 'usado' : c.expiresOn < today ? 'vencido' : 'disponible');
+  const avail = codes.filter((c) => codeState(c) === 'disponible');
+  S.wdPending = pend.length;
+  S.wdTab = S.wdTab || 'pend';
+  S.wdMonth = S.wdMonth || month;
+  const techCount = new Set(pend.map((w) => w.userId)).size;
+  const techIds = [...new Set([...days.map((w) => w.userId), ...codes.map((c) => c.techId).filter(Boolean)])];
+  const techOpts = techIds.map((id) => ({ id, name: userById(id).name })).sort((a, b) => a.name.localeCompare(b.name));
+  shell('dias', `
+    <div class="page-h"><div class="grow"><span class="label">Privado · ${wdN(days.length, 'día rendido', 'días rendidos')}</span><h1>Días trabajados</h1></div>
+      <button class="btn" data-rendir>${ICON.ticket} Rendir día</button><button class="btn primary" id="wcnew">${ICON.plus} Generar código</button></div>
+    ${note}
+    <div class="kpis k3">
+      ${wdKpi('Por pagar', fCLP(wdSum(pend)) || '$0', `${wdN(pend.length, 'día', 'días')} · ${wdN(techCount, 'técnico', 'técnicos')}`, 'var(--amber)')}
+      ${wdKpi('Pagado este mes', fCLP(wdSum(paidM)) || '$0', wdN(paidM.length, 'día pagado', 'días pagados'), 'var(--green)')}
+      ${wdKpi('Códigos disponibles', String(avail.length), 'listos para entregar', 'var(--cyan)')}
+    </div>
+    <div class="toolbar" style="margin:16px 0 12px">
+      <div class="seg" role="group" aria-label="Vista">${[['pend', `Por pagar (${pend.length})`], ['paid', 'Pagados'], ['codes', `Códigos (${avail.length})`]].map(([k, l]) => `<button data-t="${k}" class="${S.wdTab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <span class="grow"></span>
+      <select class="input" id="wtech" style="max-width:220px"><option value="">Todos los técnicos</option>${techOpts.map((u) => `<option value="${u.id}" ${S.wdTech === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
+      <input class="input" type="month" id="wmonth" value="${esc(S.wdMonth)}" style="max-width:170px" title="Mes de pago">
+    </div>
+    <div id="wbox"></div>`);
+  const box = document.getElementById('wbox');
+  const mine = (arr) => (S.wdTech ? arr.filter((x) => x.userId === S.wdTech || x.techId === S.wdTech || x.usedBy === S.wdTech) : arr);
+  const findDay = (b) => days.find((x) => x.id === b.closest('tr').dataset.id);
+  const drawPend = () => {
+    const list = mine(pend);
+    if (!list.length) { box.innerHTML = `<div class="empty panel">${ICON.check}<p>No hay días por pagar.</p></div>`; return; }
+    const groups = {};
+    list.forEach((w) => { (groups[w.userId] = groups[w.userId] || []).push(w); });
+    box.innerHTML = Object.entries(groups).sort((a, b) => wdSum(b[1]) - wdSum(a[1])).map(([uid, arr]) => { const u = userById(uid); return `<div class="panel wd-group" data-u="${uid}">
+      <div class="panel-h">${avatar({ ...u, id: uid })}<div class="grow"><b>${esc(u.name)}</b><div class="dim" style="font-size:12px">${wdN(arr.length, 'día por pagar', 'días por pagar')}</div></div>
+        <b class="mono" style="font-size:18px">${esc(fCLP(wdSum(arr)) || '$0')}</b><button class="btn sm primary" data-payall>${ICON.money} Pagar todo</button></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Día</th><th>Trabajo</th><th>Horario</th><th>Trabajo realizado</th><th>Valor</th><th></th></tr></thead><tbody>
+      ${arr.map((w) => `<tr data-id="${w.id}">
+        <td style="white-space:nowrap">${esc(fYmd(w.workDate))}<div class="dim mono" style="font-size:11px">${esc(wdCode(w.code))}</div></td>
+        <td style="min-width:200px">${wdJob(w)}</td>
+        <td class="mono" style="white-space:nowrap">${wdHours(w)}</td>
+        <td class="wd-sum" title="${esc(w.summary)}">${esc(w.summary)}</td>
+        <td class="mono" style="white-space:nowrap"><b>${esc(fCLP(w.rate) || '$0')}</b></td>
+        <td style="white-space:nowrap;text-align:right"><button class="btn sm" data-pay>${ICON.check} Pagar</button><button class="btn ghost icon sm" data-rate title="Cambiar valor" aria-label="Cambiar valor">${ICON.edit}</button><button class="btn ghost icon sm" data-del title="Eliminar" aria-label="Eliminar">${ICON.trash}</button></td></tr>`).join('')}
+      </tbody></table></div></div>`; }).join('');
+    box.querySelectorAll('[data-payall]').forEach((b) => (b.onclick = () => wdPayForm(groups[b.closest('[data-u]').dataset.u])));
+    box.querySelectorAll('[data-pay]').forEach((b) => (b.onclick = () => wdPayForm([findDay(b)])));
+    box.querySelectorAll('[data-rate]').forEach((b) => (b.onclick = () => wdRateForm(findDay(b))));
+    box.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async () => {
+      const w = findDay(b);
+      if (!(await confirmModal({ title: 'Eliminar día rendido', text: `Se eliminará el día ${esc(fYmd(w.workDate))} de ${esc(userById(w.userId).name)} (${esc(fCLP(w.rate))}). El código usado no vuelve a quedar disponible y el registro en la bitácora del trabajo se mantiene.`, okLabel: 'Eliminar', danger: true }))) return;
+      try { await api(`/api/workdays/${w.id}`, { method: 'DELETE' }); toast('Día eliminado'); viewWorkdaysAdmin(); } catch (e) { toastErr(e); }
+    }));
+  };
+  const drawPaid = () => {
+    const list = mine(days.filter((w) => w.status === 'pagado' && (!S.wdMonth || String(w.paidDate || '').startsWith(S.wdMonth))));
+    if (!list.length) { box.innerHTML = `<div class="empty panel">${ICON.money}<p>No hay pagos registrados en este mes.</p></div>`; return; }
+    box.innerHTML = `<div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>Día</th><th>Técnico</th><th>Trabajo</th><th>Valor</th><th>Pagado</th><th></th></tr></thead><tbody>
+      ${list.map((w) => `<tr data-id="${w.id}">
+        <td style="white-space:nowrap">${esc(fYmd(w.workDate))}</td>
+        <td style="white-space:nowrap">${esc(userById(w.userId).name)}</td>
+        <td style="min-width:200px">${wdJob(w)}</td>
+        <td class="mono" style="white-space:nowrap"><b>${esc(fCLP(w.rate) || '$0')}</b></td>
+        <td style="white-space:nowrap">${esc(fYmd(w.paidDate))}${w.payMethod ? `<div class="dim" style="font-size:12px">${esc(w.payMethod)}</div>` : ''}${w.payNote ? `<div class="dim" style="font-size:12px">${esc(w.payNote)}</div>` : ''}</td>
+        <td style="text-align:right"><button class="btn sm" data-unpay>Deshacer pago</button></td></tr>`).join('')}
+      <tr><td colspan="3" style="text-align:right"><b>Total</b></td><td class="mono"><b>${esc(fCLP(wdSum(list)) || '$0')}</b></td><td colspan="2"></td></tr>
+      </tbody></table></div>`;
+    box.querySelectorAll('[data-unpay]').forEach((b) => (b.onclick = async () => {
+      const w = findDay(b);
+      if (!(await confirmModal({ title: 'Deshacer pago', text: `El día ${esc(fYmd(w.workDate))} de ${esc(userById(w.userId).name)} volverá a quedar "por pagar".`, okLabel: 'Deshacer pago' }))) return;
+      try { await api(`/api/workdays/${w.id}`, { method: 'PATCH', body: { status: 'pendiente' } }); toast('Pago deshecho'); viewWorkdaysAdmin(); } catch (e) { toastErr(e); }
+    }));
+  };
+  const drawCodes = () => {
+    const list = mine(codes);
+    if (!list.length) { box.innerHTML = `<div class="empty panel">${ICON.ticket}<p>${codes.length ? 'No hay códigos con este filtro.' : 'Aún no generas códigos. Usa "Generar código" y entrégaselo al técnico.'}</p></div>`; return; }
+    const ST = { disponible: ['Disponible', 'var(--cyan)'], usado: ['Usado', 'var(--green)'], vencido: ['Vencido', 'var(--muted)'] };
+    box.innerHTML = `<div class="panel tbl-wrap"><table class="tbl"><thead><tr><th>Código</th><th>Trabajo</th><th>Técnico</th><th>Día</th><th>Valor</th><th>Vence</th><th>Estado</th><th></th></tr></thead><tbody>
+      ${list.map((c) => { const s = codeState(c); const r = c.record || {}; return `<tr data-c="${c.id}">
+        <td class="mono" style="white-space:nowrap;font-size:15px"><b>${esc(wdCode(c.code))}</b></td>
+        <td style="min-width:200px"><b>${esc(r.name || '—')}</b><div class="dim" style="font-size:12px">${r.id ? `<a href="#/r/${r.id}">${esc(r.code || '')}</a>` : ''} · ${esc(wdKind(r.kind))}</div>${c.notes ? `<div class="dim" style="font-size:12px">${esc(c.notes)}</div>` : ''}</td>
+        <td style="white-space:nowrap">${c.techId ? esc(userById(c.techId).name) : '<span class="dim">Cualquiera</span>'}</td>
+        <td style="white-space:nowrap">${esc(fYmd(c.workDate))}</td>
+        <td class="mono" style="white-space:nowrap">${esc(fCLP(c.rate) || '$0')}</td>
+        <td style="white-space:nowrap">${esc(fYmd(c.expiresOn))}</td>
+        <td style="white-space:nowrap"><span class="tag" style="--c:${ST[s][1]}">${ST[s][0]}</span>${s === 'usado' ? `<div class="dim" style="font-size:12px">${esc(userById(c.usedBy).name)} · ${esc(fDate(c.usedAt))}</div>` : ''}</td>
+        <td style="white-space:nowrap;text-align:right">${s === 'disponible' ? `<button class="btn sm" data-share>${ICON.msg} Entregar</button>` : ''}${s !== 'usado' ? `<button class="btn ghost icon sm" data-cdel title="Eliminar código" aria-label="Eliminar código">${ICON.trash}</button>` : ''}</td></tr>`; }).join('')}
+      </tbody></table></div>`;
+    const findCode = (b) => codes.find((x) => x.id === b.closest('tr').dataset.c);
+    box.querySelectorAll('[data-share]').forEach((b) => (b.onclick = () => showWorkCode(findCode(b))));
+    box.querySelectorAll('[data-cdel]').forEach((b) => (b.onclick = async () => {
+      const c = findCode(b);
+      if (!(await confirmModal({ title: 'Eliminar código', text: `El código ${esc(wdCode(c.code))} dejará de funcionar.`, okLabel: 'Eliminar', danger: true }))) return;
+      try { await api(`/api/workcodes/${c.id}`, { method: 'DELETE' }); toast('Código eliminado'); viewWorkdaysAdmin(); } catch (e) { toastErr(e); }
+    }));
+  };
+  const draw = () => {
+    document.getElementById('wmonth').style.display = S.wdTab === 'paid' ? '' : 'none';
+    if (S.wdTab === 'paid') drawPaid(); else if (S.wdTab === 'codes') drawCodes(); else drawPend();
+  };
+  draw();
+  document.getElementById('wcnew').onclick = () => workCodeForm();
+  app.querySelectorAll('.seg button[data-t]').forEach((b) => (b.onclick = () => { S.wdTab = b.dataset.t; app.querySelectorAll('.seg button[data-t]').forEach((x) => x.classList.toggle('on', x === b)); draw(); }));
+  document.getElementById('wtech').onchange = (e) => { S.wdTech = e.target.value; draw(); };
+  document.getElementById('wmonth').onchange = (e) => { S.wdMonth = e.target.value; draw(); };
+}
+function wdPayForm(arr) {
+  const u = userById(arr[0].userId);
+  openModal({
+    title: arr.length > 1 ? `Pagar ${arr.length} días · ${u.name}` : `Pagar día · ${u.name}`,
+    body: `<form id="wpf" class="grid2">
+      <div class="span2 rd-pay" style="margin:0 0 4px"><span class="label">Total a pagar</span><b>${esc(fCLP(wdSum(arr)) || '$0')}</b><small class="dim">${arr.map((w) => esc(fYmd(w.workDate))).join(' · ')}</small></div>
+      <label class="field"><span>Fecha de pago *</span><input class="input" type="date" name="paidDate" required value="${esc(todayYmd())}"></label>
+      <label class="field"><span>Forma de pago</span><input class="input" name="payMethod" maxlength="60" list="wpm" placeholder="Transferencia"><datalist id="wpm"><option value="Transferencia"><option value="Efectivo"><option value="Depósito"><option value="Cheque"></datalist></label>
+      <label class="field span2"><span>Nota (opcional)</span><input class="input" name="payNote" maxlength="200" placeholder="Ej: N° de operación"></label>
+      <p class="err span2" id="wpe"></p>
+    </form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="wpf" id="wpok">${ICON.check} Marcar pagado</button>`,
+    onMount: (el, close) => {
+      el.querySelector('#wpf').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fm = e.target; const btn = el.querySelector('#wpok');
+        btn.disabled = true; btn.textContent = 'Guardando…';
+        try {
+          await api('/api/workdays/pay', { method: 'POST', body: { ids: arr.map((w) => w.id), paidDate: fm.paidDate.value, payMethod: fm.payMethod.value, payNote: fm.payNote.value } });
+          close(); toast(arr.length > 1 ? `${arr.length} días marcados como pagados` : 'Día marcado como pagado'); viewWorkdaysAdmin();
+        } catch (ex) { el.querySelector('#wpe').textContent = ex.message; btn.disabled = false; btn.innerHTML = `${ICON.check} Marcar pagado`; }
+      });
+    },
+  });
+}
+function wdRateForm(w) {
+  openModal({
+    title: `Valor del día · ${fYmd(w.workDate)}`,
+    body: `<form id="wrf"><p class="muted" style="margin:0 0 12px">${esc(userById(w.userId).name)} · ${esc(w.recordName)}</p>
+      <label class="field"><span>Valor del día *</span><input class="input mono" name="rate" inputmode="numeric" maxlength="12" required value="${esc(Number(w.rate || 0).toLocaleString('es-CL'))}"></label>
+      <p class="err" id="wre"></p></form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="wrf" id="wrok">Guardar</button>`,
+    onMount: (el, close) => {
+      amountInput(el.querySelector('[name="rate"]'));
+      el.querySelector('#wrf').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = el.querySelector('#wrok'); btn.disabled = true;
+        try { await api(`/api/workdays/${w.id}`, { method: 'PATCH', body: { rate: e.target.rate.value } }); close(); toast('Valor actualizado'); viewWorkdaysAdmin(); }
+        catch (ex) { el.querySelector('#wre').textContent = ex.message; btn.disabled = false; }
+      });
+    },
+  });
+}
+function workCodeForm() {
+  const closed = ['finalizado', 'finalizada', 'rechazado'];
+  const recs = S.records.filter((r) => !closed.includes(r.status));
+  const opts = ['proyecto', 'mantencion', 'reparacion', 'levantamiento'].map((k) => {
+    const rs = recs.filter((r) => r.kind === k).sort((a, b) => String(b.code).localeCompare(String(a.code)));
+    return rs.length ? `<optgroup label="${esc(KIND[k].many)}">${rs.map((r) => `<option value="${r.id}">${esc(r.code)} · ${esc(r.name)}${r.client ? ' (' + esc(r.client) + ')' : ''}</option>`).join('')}</optgroup>` : '';
+  }).join('');
+  const techs = S.users.filter((u) => u.active).sort((a, b) => a.name.localeCompare(b.name));
+  const lastRate = localGet('mts_wd_rate', '');
+  const today = todayYmd();
+  openModal({
+    title: 'Generar código de día de trabajo',
+    body: `<form id="wcf" class="grid2">
+      <p class="span2 muted" style="margin:0 0 4px">El técnico ingresa este código en "Rendir día de trabajo" y recién ahí ve el trabajo y el valor del día que fijes aquí. Cada código sirve una sola vez.</p>
+      <label class="field span2"><span>Trabajo asociado *</span><select class="input" name="recordId" required><option value="">— Elige proyecto, mantención, reparación o levantamiento —</option>${opts}</select></label>
+      <label class="field span2"><span>Técnico</span><select class="input" name="techId"><option value="">Cualquier técnico (el primero que lo use)</option>${techs.map((u) => `<option value="${u.id}">${esc(u.name)} · ${esc(u.username)}</option>`).join('')}</select></label>
+      <label class="field"><span>Día de trabajo *</span><input class="input" type="date" name="workDate" required value="${today}"></label>
+      <label class="field"><span>Valor del día *</span><input class="input mono" name="rate" inputmode="numeric" maxlength="12" placeholder="$0" required value="${lastRate ? esc(Number(lastRate).toLocaleString('es-CL')) : ''}"></label>
+      <label class="field span2"><span>Se puede usar hasta (después vence)</span><input class="input" type="date" name="expiresOn" value="${wdAddDays(today, 2)}"></label>
+      <label class="field span2"><span>Nota para el técnico (opcional)</span><textarea class="input" name="notes" maxlength="500" style="min-height:56px" placeholder="Ej: Incluye colación. Retirar materiales en bodega."></textarea></label>
+      <p class="err span2" id="wce"></p>
+    </form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="wcf" id="wcok">${ICON.key} Generar código</button>`,
+    onMount: (el, close) => {
+      const fm = el.querySelector('#wcf');
+      amountInput(fm.rate);
+      fm.workDate.addEventListener('change', () => { if (fm.workDate.value && (!fm.expiresOn.value || fm.expiresOn.value < fm.workDate.value)) fm.expiresOn.value = wdAddDays(fm.workDate.value, 2); });
+      fm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = el.querySelector('#wcok');
+        btn.disabled = true; btn.textContent = 'Generando…';
+        try {
+          const d = await api('/api/workcodes', { method: 'POST', body: { recordId: fm.recordId.value, techId: fm.techId.value, workDate: fm.workDate.value, rate: fm.rate.value, expiresOn: fm.expiresOn.value, notes: fm.notes.value } });
+          localSet('mts_wd_rate', fm.rate.value.replace(/\D/g, ''));
+          close(); S.wdTab = 'codes';
+          if (location.hash === '#/dias') viewWorkdaysAdmin(); else location.hash = '#/dias';
+          showWorkCode(d.code);
+        } catch (ex) { el.querySelector('#wce').textContent = ex.message; btn.disabled = false; btn.innerHTML = `${ICON.key} Generar código`; }
+      });
+    },
+  });
+}
+function showWorkCode(c) {
+  const r = c.record || {};
+  const tech = c.techId ? userById(c.techId) : null;
+  const msg = `Hola${tech ? ' ' + tech.name.split(' ')[0] : ''}, tu código para rendir el día de trabajo del ${fYmd(c.workDate)} es: ${wdCode(c.code)}\n\nIngresa a https://operaciones.mts-security.cl y presiona "Rendir día de trabajo".`;
+  let phone = tech ? String(tech.phone || '').replace(/\D/g, '') : '';
+  if (phone.length === 9) phone = '56' + phone;
+  const wa = `https://wa.me/${phone.length >= 11 ? phone : ''}?text=${encodeURIComponent(msg)}`;
+  openModal({
+    title: 'Código para el técnico',
+    body: `<div class="wc-big">${esc(wdCode(c.code))}</div>
+      <dl class="rd-dl" style="margin-top:14px">
+        <div><dt>Trabajo</dt><dd>${esc(r.code || '')} · ${esc(r.name || '')}</dd></div>
+        <div><dt>Técnico</dt><dd>${tech ? esc(tech.name) : 'Cualquier técnico (un solo uso)'}</dd></div>
+        <div><dt>Día</dt><dd>${esc(fYmd(c.workDate))}</dd></div>
+        <div><dt>Valor del día</dt><dd class="mono"><b>${esc(fCLP(c.rate) || '$0')}</b></dd></div>
+        <div><dt>Vence</dt><dd>${esc(fYmd(c.expiresOn))}</dd></div>
+      </dl>`,
+    foot: `<button class="btn" data-copy-code>${ICON.copy} Copiar código</button><a class="btn primary" href="${esc(wa)}" target="_blank" rel="noopener">${ICON.msg} Enviar por WhatsApp</a>`,
+    onMount: (el) => { el.querySelector('[data-copy-code]').onclick = () => copyText(wdCode(c.code)); },
+  });
+}
+
 async function viewUsers() {
   await Promise.all([refreshUsers(), S.records.length ? null : refreshRecords()]);
   const users = [...S.users].sort((a, b) => (b.active - a.active) || (a.role === b.role ? a.name.localeCompare(b.name) : a.role === 'admin' ? -1 : 1));
@@ -1541,6 +1880,7 @@ async function boot() {
   } catch { return renderLogin(); }
   await Promise.all([refreshUsers(), refreshRecords().catch(() => {})]);
   startNotifications();
+  if (isOwner()) api('/api/workdays').then((d) => { S.wdPending = (d.items || []).filter((w) => w.status === 'pendiente').length; }).catch(() => {});
   if (!location.hash || location.hash === '#/') location.hash = '#/panel';
   else route();
 }
